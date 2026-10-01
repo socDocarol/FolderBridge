@@ -149,7 +149,9 @@ try {
       entryIds: [entries.find((e) => e.relativePath === name).id],
       action,
     };
-    assert.equal((await invoke("preview_operation", { request })).eligible, 1);
+    const preview = await invoke("preview_operation", { request });
+    assert.equal(preview.eligible, 1);
+    request.approvedEntryIds = preview.reviewEntryIds;
     return invoke("execute_operation", { request });
   };
   const recovered = await execute("recover.txt", "copy_to_source");

@@ -21,11 +21,21 @@ impl Engine {
                     "Destination SHA-256",
                     "Owner",
                     "Issue",
+                    "Rule review",
+                    "Rule reason",
+                    "Migration state",
+                    "Migration reason",
                 ])
                 .map_err(|e| e.to_string())?;
             let connection = self.store.connect()?;
             connection.execute_batch("BEGIN").map_err(db_error)?;
-            let mut statement=connection.prepare("SELECT id,scan_id,relative_path,source_relative,destination_relative,extension,status,source_size,destination_size,source_modified,destination_modified,source_hash,destination_hash,owner,issue FROM entries WHERE scan_id=?1 AND (?2='' OR instr(lower(relative_path),lower(?2))>0) AND (?3='' OR status=?3) AND (?4='' OR extension=?4) AND max(coalesce(source_size,0),coalesce(destination_size,0))>=?5 ORDER BY relative_path COLLATE NOCASE").map_err(db_error)?;
+            let mut statement = connection
+                .prepare(&format!(
+                    "SELECT {} FROM entries WHERE {} ORDER BY relative_path COLLATE NOCASE",
+                    crate::storage::COLUMNS,
+                    crate::storage::FILTER
+                ))
+                .map_err(db_error)?;
             let rows = statement
                 .query_map(
                     params![
@@ -33,7 +43,8 @@ impl Engine {
                         filter.search,
                         filter.status,
                         filter.extension,
-                        filter.min_size.min(i64::MAX as u64) as i64
+                        filter.min_size.min(i64::MAX as u64) as i64,
+                        filter.migration_state
                     ],
                     read_entry,
                 )
@@ -58,6 +69,10 @@ impl Engine {
                         e.destination_hash.unwrap_or_default(),
                         csv_safe(&e.owner.unwrap_or_default()),
                         csv_safe(&e.issue.unwrap_or_default()),
+                        e.rule_review.to_string(),
+                        csv_safe(&e.rule_reason),
+                        e.migration_state,
+                        csv_safe(&e.migration_reason),
                     ])
                     .map_err(|e| e.to_string())?;
                 written += 1;

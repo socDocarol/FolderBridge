@@ -31,6 +31,7 @@ fn fixture() -> Fixture {
             verify_contents: true,
             excluded_extensions: vec![],
             collect_owners: false,
+            rules: Default::default(),
         })
         .unwrap();
     let id = engine
@@ -47,6 +48,7 @@ fn fixture() -> Fixture {
             scan_id: scan,
             entry_ids: vec![id],
             action: "copy_to_destination".into(),
+            approved_entry_ids: vec![],
         })
         .unwrap();
     let item = engine.store.operation_items(operation).unwrap()[0].id;
@@ -248,6 +250,7 @@ fn held_network_files_are_excluded_from_subsequent_scans() {
             verify_contents: true,
             excluded_extensions: vec![],
             collect_owners: false,
+            rules: Default::default(),
         })
         .unwrap();
     let entries = f
@@ -308,6 +311,7 @@ fn alternate_stream_copy_succeeds_but_cleanup_proof_is_ineligible() {
             verify_contents: true,
             excluded_extensions: vec![],
             collect_owners: false,
+            rules: Default::default(),
         })
         .unwrap();
     let id = engine
@@ -324,6 +328,7 @@ fn alternate_stream_copy_succeeds_but_cleanup_proof_is_ineligible() {
             scan_id: scan,
             entry_ids: vec![id],
             action: "copy_to_destination".into(),
+            approved_entry_ids: vec![],
         })
         .unwrap();
     assert!(target.join("ads.txt").exists());

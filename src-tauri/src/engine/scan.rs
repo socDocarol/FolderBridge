@@ -13,7 +13,7 @@ impl Engine {
         result
     }
 
-    fn scan_inner(&self, options: ScanOptions) -> Result<i64> {
+    fn scan_inner(&self, mut options: ScanOptions) -> Result<i64> {
         let (source, destination) = validate_roots(
             Path::new(&options.source),
             options
@@ -22,8 +22,14 @@ impl Engine {
                 .filter(|p| !p.trim().is_empty())
                 .map(Path::new),
         )?;
+        options.source = source.to_string_lossy().into_owned();
+        options.destination = destination
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned());
+        crate::policy::normalize_options(&mut options)?;
+        let snapshot = serde_json::to_string(&options).map_err(|e| e.to_string())?;
         let conn = self.store.connect()?;
-        conn.execute("INSERT INTO scans(source,destination,started_at,state,verified) VALUES(?,?,?,'running',?)",params![source.to_string_lossy(),destination.as_ref().map(|p|p.to_string_lossy().into_owned()),now(),options.verify_contents]).map_err(db_error)?;
+        conn.execute("INSERT INTO scans(source,destination,started_at,state,verified,options) VALUES(?,?,?,'running',?,?)",params![options.source,options.destination,now(),options.verify_contents,snapshot]).map_err(db_error)?;
         let id = conn.last_insert_rowid();
         self.update(|p| {
             p.scan_id = Some(id);
@@ -40,6 +46,7 @@ impl Engine {
                 &source,
                 destination.as_deref(),
                 options.verify_contents,
+                &options,
             )
         })();
         // inventory/compare may have been interrupted inside a batch transaction.
@@ -97,11 +104,6 @@ impl Engine {
         {
             self.scan_issue(conn,id,STAGING,"Interrupted staging files were retained here. Inspect this folder before using this scan for file operations.")?;
         }
-        let excluded: HashSet<String> = options
-            .excluded_extensions
-            .iter()
-            .map(|s| format!(".{}", s.trim().trim_start_matches('.').to_lowercase()))
-            .collect();
         conn.execute_batch("BEGIN").map_err(db_error)?;
         let mut count = 0u64;
         let walk = WalkDir::new(root)
@@ -176,11 +178,7 @@ impl Engine {
             } else {
                 relative.clone()
             };
-            let status = if excluded.contains(&extension) {
-                "excluded"
-            } else {
-                "pending"
-            };
+            let status = "pending";
             let owner = if options.collect_owners {
                 Some(file_owner(&path).unwrap_or_else(|e| format!("Unavailable: {e}")))
             } else {
@@ -238,6 +236,7 @@ impl Engine {
         source: &Path,
         destination: Option<&Path>,
         verify: bool,
+        options: &ScanOptions,
     ) -> Result<()> {
         let total: i64 = conn
             .query_row("SELECT count(*) FROM entries WHERE scan_id=?", [id], |r| {
@@ -265,6 +264,14 @@ impl Engine {
                     self.update(|p| p.processed += 1);
                     continue;
                 }
+                let policy = crate::policy::classify(&entry, options);
+                if let Some(reason) = policy.skip_reason {
+                    conn.execute("UPDATE entries SET status='excluded',issue=?1,rule_review=0,rule_reason=?1,migration_state='skipped',migration_reason=?1 WHERE id=?2",params![reason,entry.id]).map_err(db_error)?;
+                    self.update(|p| p.processed += 1);
+                    continue;
+                }
+                let rule_review = !policy.review_reason.is_empty();
+                let rule_reason = policy.review_reason;
                 let compared = (|| -> Result<(String, Option<String>, Option<String>)> {
                     match (entry.source_size, entry.destination_size) {
                         (Some(_), None) => Ok((
@@ -310,7 +317,9 @@ impl Engine {
                 })();
                 match compared {
                     Ok((status, ah, bh)) => {
-                        conn.execute("UPDATE entries SET status=?,source_hash=?,destination_hash=? WHERE id=?",params![status,ah,bh,entry.id]).map_err(db_error)?;
+                        let (migration_state, migration_reason) =
+                            crate::policy::migration(&status, rule_review, &rule_reason);
+                        conn.execute("UPDATE entries SET status=?,source_hash=?,destination_hash=?,rule_review=?,rule_reason=?,migration_state=?,migration_reason=? WHERE id=?",params![status,ah,bh,rule_review,rule_reason,migration_state,migration_reason,entry.id]).map_err(db_error)?;
                     }
                     Err(e) if e == "Cancelled" => return Err(e),
                     Err(e) => {

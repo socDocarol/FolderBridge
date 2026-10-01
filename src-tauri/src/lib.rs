@@ -1,6 +1,7 @@
 pub mod engine;
 pub mod models;
 pub mod paths;
+pub mod policy;
 pub mod reveal;
 pub mod storage;
 

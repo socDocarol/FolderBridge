@@ -21,7 +21,8 @@ pub struct Store {
     pub path: PathBuf,
 }
 
-const COLUMNS: &str = "id,scan_id,relative_path,source_relative,destination_relative,extension,status,source_size,destination_size,source_modified,destination_modified,source_hash,destination_hash,owner,issue";
+pub(crate) const COLUMNS: &str = "id,scan_id,relative_path,source_relative,destination_relative,extension,status,source_size,destination_size,source_modified,destination_modified,source_hash,destination_hash,owner,issue,rule_review,rule_reason,migration_state,migration_reason";
+pub(crate) const FILTER: &str = "scan_id=?1 AND (?2='' OR instr(lower(relative_path),lower(?2))>0) AND (?3='' OR status=?3) AND (?4='' OR extension=?4) AND max(coalesce(source_size,0),coalesce(destination_size,0))>=?5 AND (?6='' OR migration_state=?6)";
 
 fn number(row: &Row<'_>, index: usize) -> rusqlite::Result<u64> {
     Ok(row.get::<_, i64>(index)?.max(0) as u64)
@@ -47,6 +48,34 @@ pub fn read_entry(row: &Row<'_>) -> rusqlite::Result<Entry> {
         destination_hash: row.get(12)?,
         owner: row.get(13)?,
         issue: row.get(14)?,
+        rule_review: row.get(15)?,
+        rule_reason: row.get(16)?,
+        migration_state: row.get(17)?,
+        migration_reason: row.get(18)?,
+    })
+}
+fn read_scan(row: &Row<'_>) -> rusqlite::Result<Scan> {
+    let options: Option<String> = row.get(8)?;
+    Ok(Scan {
+        id: row.get(0)?,
+        source: row.get(1)?,
+        destination: row.get(2)?,
+        started_at: row.get(3)?,
+        state: row.get(4)?,
+        verified: row.get(5)?,
+        files: number(row, 6)?,
+        errors: number(row, 7)?,
+        options: options
+            .map(|json| {
+                serde_json::from_str(&json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        8,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -63,12 +92,14 @@ impl Store {
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS scans (
                 id INTEGER PRIMARY KEY, source TEXT NOT NULL, destination TEXT, started_at INTEGER NOT NULL,
-                state TEXT NOT NULL, verified INTEGER NOT NULL, files INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0);
+                state TEXT NOT NULL, verified INTEGER NOT NULL, files INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0, options TEXT);
             CREATE TABLE IF NOT EXISTS entries (
                 id INTEGER PRIMARY KEY, scan_id INTEGER NOT NULL, path_key TEXT NOT NULL, relative_path TEXT NOT NULL,
                 source_relative TEXT, destination_relative TEXT, extension TEXT NOT NULL, status TEXT NOT NULL,
                 source_size INTEGER, destination_size INTEGER, source_modified INTEGER, destination_modified INTEGER,
                 source_hash TEXT, destination_hash TEXT, owner TEXT, issue TEXT,
+                rule_review INTEGER NOT NULL DEFAULT 0, rule_reason TEXT NOT NULL DEFAULT '',
+                migration_state TEXT NOT NULL DEFAULT 'skipped', migration_reason TEXT NOT NULL DEFAULT '',
                 UNIQUE(scan_id,path_key));
             CREATE INDEX IF NOT EXISTS entries_scan_status ON entries(scan_id,status);
             CREATE INDEX IF NOT EXISTS entries_scan_path ON entries(scan_id,relative_path COLLATE NOCASE);
@@ -87,6 +118,34 @@ impl Store {
             UPDATE scans SET state='interrupted' WHERE state='running';
             UPDATE operations SET state='interrupted' WHERE state='running';
         ").map_err(db_error)?;
+        for (table, column, definition) in [
+            ("scans", "options", "TEXT"),
+            ("entries", "rule_review", "INTEGER NOT NULL DEFAULT 0"),
+            ("entries", "rule_reason", "TEXT NOT NULL DEFAULT ''"),
+            (
+                "entries",
+                "migration_state",
+                "TEXT NOT NULL DEFAULT 'skipped'",
+            ),
+            ("entries", "migration_reason", "TEXT NOT NULL DEFAULT ''"),
+        ] {
+            let mut stmt = connection
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .map_err(db_error)?;
+            let names = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(db_error)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(db_error)?;
+            if !names.iter().any(|name| name == column) {
+                connection
+                    .execute(
+                        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+                        [],
+                    )
+                    .map_err(db_error)?;
+            }
+        }
         Ok(store)
     }
 
@@ -103,27 +162,16 @@ impl Store {
 
     pub fn scans_page(&self, offset: u64) -> Result<Vec<Scan>> {
         let conn = self.connect()?;
-        let mut statement = conn.prepare("SELECT id,source,destination,started_at,state,verified,files,errors FROM scans ORDER BY id DESC LIMIT 100 OFFSET ?").map_err(db_error)?;
+        let mut statement = conn.prepare("SELECT id,source,destination,started_at,state,verified,files,errors,options FROM scans ORDER BY id DESC LIMIT 100 OFFSET ?").map_err(db_error)?;
         let rows = statement
-            .query_map([offset.min(i64::MAX as u64) as i64], |r| {
-                Ok(Scan {
-                    id: r.get(0)?,
-                    source: r.get(1)?,
-                    destination: r.get(2)?,
-                    started_at: r.get(3)?,
-                    state: r.get(4)?,
-                    verified: r.get(5)?,
-                    files: number(r, 6)?,
-                    errors: number(r, 7)?,
-                })
-            })
+            .query_map([offset.min(i64::MAX as u64) as i64], read_scan)
             .map_err(db_error)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)
     }
 
     pub fn scan(&self, id: i64) -> Result<Scan> {
         let conn = self.connect()?;
-        conn.query_row("SELECT id,source,destination,started_at,state,verified,files,errors FROM scans WHERE id=?", [id], |r| Ok(Scan {id:r.get(0)?,source:r.get(1)?,destination:r.get(2)?,started_at:r.get(3)?,state:r.get(4)?,verified:r.get(5)?,files:number(r,6)?,errors:number(r,7)?})).map_err(db_error)
+        conn.query_row("SELECT id,source,destination,started_at,state,verified,files,errors,options FROM scans WHERE id=?", [id], read_scan).map_err(db_error)
     }
 
     pub fn entry(conn: &Connection, scan_id: i64, id: i64) -> Result<Entry> {
@@ -150,7 +198,7 @@ impl Store {
 
     pub fn entries(&self, filter: &EntryFilter) -> Result<EntryPage> {
         let conn = self.connect()?;
-        let conditions = "scan_id=?1 AND (?2='' OR instr(lower(relative_path),lower(?2))>0) AND (?3='' OR status=?3) AND (?4='' OR extension=?4) AND max(coalesce(source_size,0),coalesce(destination_size,0))>=?5";
+        let conditions = FILTER;
         let total = conn
             .query_row(
                 &format!("SELECT count(*) FROM entries WHERE {conditions}"),
@@ -159,12 +207,13 @@ impl Store {
                     filter.search,
                     filter.status,
                     filter.extension,
-                    filter.min_size.min(i64::MAX as u64) as i64
+                    filter.min_size.min(i64::MAX as u64) as i64,
+                    filter.migration_state
                 ],
                 |r| number(r, 0),
             )
             .map_err(db_error)?;
-        let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM entries WHERE {conditions} ORDER BY relative_path COLLATE NOCASE LIMIT ?6 OFFSET ?7")).map_err(db_error)?;
+        let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM entries WHERE {conditions} ORDER BY relative_path COLLATE NOCASE LIMIT ?7 OFFSET ?8")).map_err(db_error)?;
         let limit = if filter.limit == 0 {
             100
         } else {
@@ -178,6 +227,7 @@ impl Store {
                     filter.status,
                     filter.extension,
                     filter.min_size.min(i64::MAX as u64) as i64,
+                    filter.migration_state,
                     limit as i64,
                     filter.offset.min(i64::MAX as u64) as i64
                 ],
@@ -194,7 +244,11 @@ impl Store {
 
     pub fn matching_ids(&self, filter: &EntryFilter) -> Result<Vec<i64>> {
         let conn = self.connect()?;
-        let mut stmt=conn.prepare("SELECT id FROM entries WHERE scan_id=?1 AND (?2='' OR instr(lower(relative_path),lower(?2))>0) AND (?3='' OR status=?3) AND (?4='' OR extension=?4) AND max(coalesce(source_size,0),coalesce(destination_size,0))>=?5 ORDER BY id LIMIT 10001").map_err(db_error)?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT id FROM entries WHERE {FILTER} ORDER BY id LIMIT 10001"
+            ))
+            .map_err(db_error)?;
         let rows = stmt
             .query_map(
                 params![
@@ -202,7 +256,8 @@ impl Store {
                     filter.search,
                     filter.status,
                     filter.extension,
-                    filter.min_size.min(i64::MAX as u64) as i64
+                    filter.min_size.min(i64::MAX as u64) as i64,
+                    filter.migration_state
                 ],
                 |r| r.get(0),
             )
@@ -232,7 +287,7 @@ impl Store {
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)
         };
         let totals = conn.query_row("SELECT coalesce(sum(source_size),0),coalesce(sum(destination_size),0),coalesce(sum(CASE WHEN status='identical' THEN destination_size ELSE 0 END),0) FROM entries WHERE scan_id=?", [id], |r| Ok((number(r,0)?,number(r,1)?,number(r,2)?))).map_err(db_error)?;
-        Ok(Analysis { statuses:group("status")?, extensions:group("CASE WHEN extension='' THEN '(no extension)' ELSE extension END")?,
+        Ok(Analysis { statuses:group("status")?, migration_states:group("migration_state")?, extensions:group("CASE WHEN extension='' THEN '(no extension)' ELSE extension END")?,
             folders:group("CASE WHEN instr(relative_path,'/')>0 THEN substr(relative_path,1,instr(relative_path,'/')-1) ELSE '(root)' END")?,
             source_bytes:totals.0,destination_bytes:totals.1,duplicate_bytes:totals.2,size_statistics:self.size_statistics(id)? })
     }
@@ -353,7 +408,9 @@ impl Store {
             })
             .optional()
             .map_err(db_error)?;
-        let json = serde_json::to_string(options).map_err(|e| e.to_string())?;
+        let mut normalized = options.clone();
+        crate::policy::normalize_options(&mut normalized)?;
+        let json = serde_json::to_string(&normalized).map_err(|e| e.to_string())?;
         if let Some(id) = existing {
             conn.execute("UPDATE pairs SET options=? WHERE id=?", params![json, id])
                 .map_err(db_error)?;

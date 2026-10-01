@@ -32,10 +32,13 @@ test("small desktop fits the workspace and pages through results without scrolli
     .toBe(true);
   await expect(page.locator(".file-name").first()).toHaveText(pageStart!);
   await page.screenshot({ path: "qa/compact-800.png" });
-  await page.getByRole("button", { name: "Scan options", exact: true }).click();
+  await page.getByRole("button", { name: "Rules", exact: true }).click();
+  await expect(
+    page.getByLabel("Skip backup files", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Scan", exact: true }).click();
   await expect(page.getByLabel("Include owners")).toBeVisible();
-  await expect(page.getByLabel("Exclude types")).toBeVisible();
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.getByRole("button", { name: "Apply rules", exact: true }).click();
   await page.getByRole("button", { name: "Storage", exact: true }).click();
   await page.getByRole("button", { name: "Statistics", exact: true }).click();
   await expect(

@@ -22,6 +22,7 @@ import {
   Copy,
   Database,
   FileSearch,
+  Flag,
   Folder,
   FolderInput,
   FolderOpen,
@@ -38,6 +39,8 @@ import {
 } from "lucide-react";
 import { call, chooseFolder, chooseReport, desktop } from "./api";
 import { OperationDetails } from "./OperationDetails";
+import { RulesDialog } from "./RulesDialog";
+import { emptyRules, rulesSummary, withRules } from "./rules";
 import {
   actions,
   basename,
@@ -74,21 +77,24 @@ import type {
   ScanOptions,
 } from "./types";
 
-type Page = "compare" | "insights" | "history";
+type Page = "compare" | "migrate" | "insights" | "history";
 const emptyOptions: ScanOptions = {
   source: "",
   destination: "",
   verifyContents: true,
   excludedExtensions: [],
   collectOwners: false,
+  rules: emptyRules,
 };
 const pageNames: Record<Page, string> = {
   compare: "Compare",
+  migrate: "Migrate",
   insights: "Storage",
   history: "History",
 };
 const blankAnalysis: Analysis = {
   statuses: [],
+  migrationStates: [],
   extensions: [],
   folders: [],
   sourceBytes: 0,
@@ -106,17 +112,22 @@ export default function App() {
   const [operations, setOperations] = useState<Operation[]>([]);
   const [moreOperations, setMoreOperations] = useState(false);
   const [moreScans, setMoreScans] = useState(false);
-  const [data, setData] = useState<EntryPage>({ entries: [], total: 0 });
+  const [loadedRows, setData] = useState<EntryPage>({ entries: [], total: 0 });
+  const data = loadedRows.entries.some((entry) => entry.scanId !== scanId)
+    ? { entries: [], total: 0 }
+    : loadedRows;
   const [analysis, setAnalysis] = useState<Analysis>(blankAnalysis);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [status, setStatus] = useState("");
+  const [migrationState, setMigrationState] = useState("");
   const [extension, setExtension] = useState("");
   const [minSize, setMinSize] = useState("");
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState(new Set<number>());
   const [details, setDetails] = useState<Entry | null>(null);
-  const [excludedText, setExcludedText] = useState("");
+  const [rulesDraft, setRulesDraft] = useState<ScanOptions | null>(null);
+  const [rulesSection, setRulesSection] = useState<"Types" | "Files">("Types");
   const [showOptions, setShowOptions] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [help, setHelp] = useState(false);
@@ -138,12 +149,18 @@ export default function App() {
     request: OperationRequest;
   } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [flagsApproved, setFlagsApproved] = useState(false);
+  const [migrationReview, setMigrationReview] = useState<{
+    plans: { request: OperationRequest; preview: Preview }[];
+    selectedCount: number;
+  } | null>(null);
+  const cancelRequested = useRef(false);
   const [operationDetail, setOperationDetail] = useState<{
     operation: Operation;
     items: OperationItem[];
   } | null>(null);
   const [restoreReview, setRestoreReview] = useState<Operation | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [loadingRows, setLoadingRows] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState("");
@@ -156,12 +173,23 @@ export default function App() {
       scanId: scanId || 0,
       search: deferredSearch,
       status,
+      migrationState: page === "migrate" ? migrationState : "",
       extension,
       minSize: (Number(minSize) || 0) * 1024 * 1024,
       offset,
       limit: pageSize,
     }),
-    [scanId, deferredSearch, status, extension, minSize, offset, pageSize],
+    [
+      scanId,
+      deferredSearch,
+      status,
+      migrationState,
+      page,
+      extension,
+      minSize,
+      offset,
+      pageSize,
+    ],
   );
   const reload = useCallback(async () => {
     const [s, p, o] = await Promise.all([
@@ -181,15 +209,11 @@ export default function App() {
       .then((s) => {
         if (s[0]) {
           setScanId(s[0].id);
-          setOptions((v) => ({
-            ...v,
-            source: readablePath(s[0].source),
-            destination: s[0].destination ? readablePath(s[0].destination) : "",
-            verifyContents: s[0].verified,
-          }));
+          setOptions(scanOptions(s[0]));
         }
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
   }, [reload]);
   useEffect(() => {
     if (!running) return;
@@ -240,7 +264,15 @@ export default function App() {
   }, [scanId]);
   useEffect(() => {
     setOffset(0);
-  }, [deferredSearch, status, extension, minSize, scanId]);
+  }, [
+    deferredSearch,
+    status,
+    migrationState,
+    page,
+    extension,
+    minSize,
+    scanId,
+  ]);
   useEffect(() => {
     setSelected(new Set());
     setDetails(null);
@@ -303,17 +335,15 @@ export default function App() {
       const id = await call<number>("scan_folders", {
         options: {
           ...options,
-          excludedExtensions: excludedText
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
           source: options.source.trim(),
           destination: options.destination?.trim() || null,
         },
       });
-      await reload();
+      const updated = await reload();
       setScanId(id);
-      setPage("compare");
+      const saved = updated.find((row) => row.id === id);
+      if (saved) setOptions(scanOptions(saved));
+      setMigrationState("");
       setStatus("");
       setExtension("");
       setSearch("");
@@ -332,6 +362,7 @@ export default function App() {
     });
   }
   async function reviewAction() {
+    setBusy(true);
     await task(async () => {
       const request: OperationRequest = {
         scanId: scanId!,
@@ -341,11 +372,84 @@ export default function App() {
       const preview = await call<Preview>("preview_operation", { request });
       setReview({ request, preview });
       setConfirmed(false);
+      setFlagsApproved(false);
     });
+    setBusy(false);
+  }
+  async function reviewMigration() {
+    setBusy(true);
+    await task(async () => {
+      const plans = await Promise.all(
+        (["copy_to_destination", "keep_both"] as const).map(async (action) => {
+          const request: OperationRequest = {
+            scanId: scanId!,
+            entryIds: [...selected],
+            action,
+          };
+          const preview = await call<Preview>("preview_operation", { request });
+          return {
+            request: { ...request, entryIds: preview.eligibleEntryIds },
+            preview,
+          };
+        }),
+      );
+      const eligible = plans.filter((plan) => plan.preview.eligible > 0);
+      if (!eligible.length)
+        throw new Error("Select Ready or Review files to migrate.");
+      setMigrationReview({ plans: eligible, selectedCount: selected.size });
+      setConfirmed(false);
+      setFlagsApproved(false);
+    });
+    setBusy(false);
+  }
+  async function executeMigration() {
+    if (
+      !migrationReview ||
+      !confirmed ||
+      (migrationReview.plans.some(
+        (plan) => plan.preview.reviewEntryIds.length > 0,
+      ) &&
+        !flagsApproved)
+    )
+      return;
+    const plans = migrationReview.plans;
+    setMigrationReview(null);
+    setBusy(true);
+    setProgress(null);
+    setNotice("");
+    cancelRequested.current = false;
+    await task(async () => {
+      let completed = 0;
+      for (const plan of plans) {
+        if (cancelRequested.current) break;
+        await call<number>("execute_operation", {
+          request: {
+            ...plan.request,
+            approvedEntryIds: plan.preview.reviewEntryIds,
+          },
+        });
+        completed++;
+        const outcome = await call<Progress>("get_progress");
+        setProgress(outcome);
+        if (outcome.phase === "cancelled" || outcome.errors > 0) {
+          cancelRequested.current = true;
+          break;
+        }
+      }
+      await reload();
+      setSelected(new Set());
+      setNotice(
+        `${cancelRequested.current ? "Migration stopped" : "Migration finished"}. ${completed} operation${completed === 1 ? "" : "s"} in History. Review outcomes and optional cleanup there; prepare again to refresh this list.`,
+      );
+    });
+    setBusy(false);
   }
   async function execute() {
     if (!review) return;
-    const request = review.request;
+    const request = {
+      ...review.request,
+      approvedEntryIds: flagsApproved ? review.preview.reviewEntryIds : [],
+    };
     setReview(null);
     setBusy(true);
     setProgress(null);
@@ -364,8 +468,22 @@ export default function App() {
   }
   async function selectMatching() {
     await task(async () => {
-      const ids = await call<number[]>("matching_entry_ids", { filter });
-      setSelected(new Set(ids));
+      let ids: number[];
+      if (page === "migrate" && !migrationState) {
+        const groups = await Promise.all(
+          ["ready", "review"].map((migrationState) =>
+            call<number[]>("matching_entry_ids", {
+              filter: { ...filter, migrationState },
+            }),
+          ),
+        );
+        ids = groups.flat();
+      } else ids = await call<number[]>("matching_entry_ids", { filter });
+      const next =
+        page === "migrate" ? new Set([...selected, ...ids]) : new Set(ids);
+      if (next.size > 10000)
+        throw new Error("Select up to 10,000 files. Narrow the filters first.");
+      setSelected(next);
     });
   }
   async function loadOlder(kind: "scans" | "operations") {
@@ -498,12 +616,7 @@ export default function App() {
   }
   function loadScan(s: Scan) {
     setScanId(s.id);
-    setOptions((v) => ({
-      ...v,
-      source: readablePath(s.source),
-      destination: s.destination ? readablePath(s.destination) : "",
-      verifyContents: s.verified,
-    }));
+    setOptions(scanOptions(s));
     setPage("compare");
     setStatus("");
     setExtension("");
@@ -517,8 +630,53 @@ export default function App() {
       return next;
     });
   }
+  function scanOptions(scan: Scan): ScanOptions {
+    return withRules({
+      ...(scan.options || emptyOptions),
+      source: readablePath(scan.source),
+      destination: scan.destination ? readablePath(scan.destination) : "",
+      verifyContents: scan.verified,
+    });
+  }
+  function openRules(path?: string) {
+    if (path && details?.scanId !== scanId) {
+      setError(
+        "The comparison changed. Open the file again before adding a rule.",
+      );
+      return;
+    }
+    setRulesDraft(
+      path
+        ? {
+            ...options,
+            rules: {
+              ...options.rules,
+              excludedPaths: [
+                ...new Set([...options.rules.excludedPaths, path]),
+              ],
+            },
+          }
+        : options,
+    );
+    setRulesSection(path ? "Files" : "Types");
+    setDetails(null);
+    setShowOptions(true);
+  }
+  function applyRules(updated: ScanOptions) {
+    setShowOptions(false);
+    if (JSON.stringify(updated) !== JSON.stringify(options)) {
+      setOptions(updated);
+      setScanId(null);
+      setReview(null);
+      setMigrationReview(null);
+      setNotice("Rules changed. Compare or Prepare again to apply them.");
+    }
+  }
+  const selectable = data.entries.filter(
+    (e) => page !== "migrate" || e.migrationState !== "skipped",
+  );
   const allPageSelected =
-    data.entries.length > 0 && data.entries.every((e) => selected.has(e.id));
+    selectable.length > 0 && selectable.every((e) => selected.has(e.id));
   const statusCount = (value: string) =>
     analysis.statuses.find((s) => s.label === value)?.count || 0;
 
@@ -539,16 +697,24 @@ export default function App() {
           FolderBridge
         </button>
         <nav aria-label="Main navigation" className="main-navigation">
-          {(["compare", "insights", "history"] as const).map((item) => (
-            <button
-              key={item}
-              className={page === item ? "nav-item active" : "nav-item"}
-              aria-current={page === item ? "page" : undefined}
-              onClick={() => setPage(item)}
-            >
-              {pageNames[item]}
-            </button>
-          ))}
+          {(["compare", "migrate", "insights", "history"] as const).map(
+            (item) => (
+              <button
+                key={item}
+                className={page === item ? "nav-item active" : "nav-item"}
+                aria-current={page === item ? "page" : undefined}
+                onClick={() => {
+                  setPage(item);
+                  setStatus("");
+                  setMigrationState("");
+                  setOffset(0);
+                  setSelected(new Set());
+                }}
+              >
+                {pageNames[item]}
+              </button>
+            ),
+          )}
         </nav>
         <div className="header-actions">
           <button
@@ -608,6 +774,7 @@ export default function App() {
                     className="text-button"
                     onClick={() =>
                       void task(async () => {
+                        cancelRequested.current = true;
                         await call("cancel_job");
                         setNotice("Cancelling after the current file request…");
                       })
@@ -651,7 +818,7 @@ export default function App() {
             </section>
           )}
 
-          {page === "compare" && (
+          {(page === "compare" || page === "migrate") && (
             <>
               <section className="folder-setup" aria-label="Folders to compare">
                 <div className="folder-inputs">
@@ -670,7 +837,9 @@ export default function App() {
                           placeholder={
                             i === 0
                               ? "Choose source folder"
-                              : "Optional — leave empty for inventory"
+                              : page === "migrate"
+                                ? "Choose destination folder"
+                                : "Optional for inventory"
                           }
                           onChange={(e) => changePath(side, e.target.value)}
                           disabled={running}
@@ -727,26 +896,42 @@ export default function App() {
                   <div className="setup-actions">
                     <button
                       className="text-button"
-                      onClick={() => setShowOptions(true)}
+                      onClick={() => openRules()}
+                      disabled={running}
                       aria-haspopup="dialog"
                     >
                       <Settings2 size={14} />
-                      Scan options
+                      Rules
                     </button>
                     <button
                       className="button primary"
                       onClick={() => void scan()}
-                      disabled={running || !options.source.trim()}
+                      disabled={
+                        running ||
+                        !options.source.trim() ||
+                        (page === "migrate" && !options.destination?.trim())
+                      }
                     >
-                      {options.destination?.trim()
-                        ? "Compare"
-                        : "Scan inventory"}
+                      {page === "migrate"
+                        ? "Prepare"
+                        : options.destination?.trim()
+                          ? "Compare"
+                          : "Scan inventory"}
                       <ArrowRight size={15} />
                     </button>
                   </div>
                 </div>
+                <p className="rules-summary" title={rulesSummary(options)}>
+                  {rulesSummary(options)}
+                </p>
               </section>
 
+              {page === "migrate" && current && !current.options && (
+                <p className="rules-hint">
+                  This older comparison has no saved rules. Prepare again before
+                  migrating.
+                </p>
+              )}
               {current && (
                 <div className="comparison-meta">
                   <span>
@@ -774,7 +959,49 @@ export default function App() {
                   </button>
                 </div>
               )}
-              {current && (
+              {current && page === "migrate" && (
+                <div
+                  className="comparison-summary migration-summary"
+                  aria-label="Migration summary"
+                >
+                  {(["ready", "review", "skipped"] as const).map((state) => {
+                    const label = state[0].toUpperCase() + state.slice(1);
+                    const total =
+                      analysis.migrationStates.find(
+                        (group) => group.label === state,
+                      )?.count || 0;
+                    return (
+                      <button
+                        key={state}
+                        className={`summary-item ${migrationState === state ? "selected" : ""}`}
+                        aria-label={`${label} ${total}`}
+                        aria-pressed={migrationState === state}
+                        onClick={() => {
+                          setMigrationState(
+                            migrationState === state ? "" : state,
+                          );
+                          setStatus("");
+                        }}
+                      >
+                        <span className={`summary-symbol symbol-${state}`}>
+                          {state === "ready" ? (
+                            <Check size={17} />
+                          ) : state === "review" ? (
+                            <Flag size={17} />
+                          ) : (
+                            <X size={17} />
+                          )}
+                        </span>
+                        <span>
+                          {label}
+                          <strong>{count(total)}</strong>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {current && page === "compare" && (
                 <div
                   className="comparison-summary"
                   aria-label="Comparison summary"
@@ -818,7 +1045,11 @@ export default function App() {
 
               <section
                 className="results-panel"
-                aria-label="File comparison results"
+                aria-label={
+                  page === "migrate"
+                    ? "Migration files"
+                    : "File comparison results"
+                }
               >
                 <div className="results-tools">
                   <label className="search-field">
@@ -841,14 +1072,32 @@ export default function App() {
                     )}
                   </label>
                   <label className="status-select">
-                    <span className="sr-only">Filter by status</span>
+                    <span className="sr-only">
+                      {page === "migrate"
+                        ? "Filter by decision"
+                        : "Filter by status"}
+                    </span>
                     <select
-                      value={status}
-                      onChange={(e) => setStatus(e.target.value)}
+                      value={page === "migrate" ? migrationState : status}
+                      onChange={(e) =>
+                        page === "migrate"
+                          ? setMigrationState(e.target.value)
+                          : setStatus(e.target.value)
+                      }
                       disabled={!current}
                     >
-                      <option value="">All statuses</option>
-                      {Object.entries(statuses).map(([key, label]) => (
+                      <option value="">
+                        {page === "migrate" ? "All decisions" : "All statuses"}
+                      </option>
+                      {Object.entries(
+                        page === "migrate"
+                          ? {
+                              ready: "Ready",
+                              review: "Review",
+                              skipped: "Skipped",
+                            }
+                          : statuses,
+                      ).map(([key, label]) => (
                         <option key={key} value={key}>
                           {label}
                         </option>
@@ -878,15 +1127,23 @@ export default function App() {
                 {!current ? (
                   <EmptyState
                     icon={<FolderInput size={27} />}
-                    title="Choose folders to compare."
+                    title={
+                      page === "migrate"
+                        ? "Prepare your migration."
+                        : "Choose folders to compare."
+                    }
                   >
-                    <p>Leave destination empty for an inventory.</p>
+                    <p>
+                      {page === "migrate"
+                        ? "Choose both folders, set rules, then Prepare. No files change until you confirm."
+                        : "Leave destination empty for an inventory."}
+                    </p>
                   </EmptyState>
                 ) : (
                   <>
                     <div
                       ref={tableRef}
-                      className={`table-scroll file-table ${loadingRows ? "loading" : ""}`}
+                      className={`table-scroll file-table ${page === "migrate" ? "migration-table" : ""} ${loadingRows ? "loading" : ""}`}
                     >
                       <table>
                         <thead>
@@ -896,11 +1153,11 @@ export default function App() {
                                 type="checkbox"
                                 aria-label="Select all files on this page"
                                 checked={allPageSelected}
-                                disabled={!data.entries.length || running}
+                                disabled={!selectable.length || running}
                                 onChange={() =>
                                   setSelected((old) => {
                                     const next = new Set(old);
-                                    data.entries.forEach((e) =>
+                                    selectable.forEach((e) =>
                                       allPageSelected
                                         ? next.delete(e.id)
                                         : next.add(e.id),
@@ -911,9 +1168,19 @@ export default function App() {
                               />
                             </th>
                             <th>File</th>
-                            <th>Status</th>
-                            <th className="numeric">Source</th>
-                            <th className="numeric">Destination</th>
+                            <th>
+                              {page === "migrate" ? "Decision" : "Status"}
+                            </th>
+                            <th className="numeric">
+                              {page === "migrate" ? "Size" : "Source"}
+                            </th>
+                            <th
+                              className={
+                                page === "migrate" ? "reason-cell" : "numeric"
+                              }
+                            >
+                              {page === "migrate" ? "Reason" : "Destination"}
+                            </th>
                             <th className="table-arrow">
                               <span className="sr-only">Explorer</span>
                             </th>
@@ -933,7 +1200,11 @@ export default function App() {
                                   aria-label={`Select ${entry.relativePath}`}
                                   checked={selected.has(entry.id)}
                                   onChange={() => toggle(entry.id)}
-                                  disabled={running}
+                                  disabled={
+                                    running ||
+                                    (page === "migrate" &&
+                                      entry.migrationState === "skipped")
+                                  }
                                 />
                               </td>
                               <td>
@@ -962,13 +1233,48 @@ export default function App() {
                                 </button>
                               </td>
                               <td>
-                                <StatusBadge status={entry.status} />
+                                {page === "migrate" ? (
+                                  <span
+                                    className={`status-badge decision-${entry.migrationState}`}
+                                  >
+                                    {entry.migrationState[0].toUpperCase() +
+                                      entry.migrationState.slice(1)}
+                                  </span>
+                                ) : (
+                                  <>
+                                    <StatusBadge status={entry.status} />
+                                    {(entry.ruleReview ||
+                                      entry.status === "different") && (
+                                      <Flag
+                                        className="rule-flag"
+                                        size={12}
+                                        aria-label="Needs review"
+                                      />
+                                    )}
+                                  </>
+                                )}
                               </td>
                               <td className="numeric">
-                                {bytes(entry.sourceSize)}
+                                {bytes(
+                                  page === "migrate"
+                                    ? (entry.sourceSize ??
+                                        entry.destinationSize)
+                                    : entry.sourceSize,
+                                )}
                               </td>
-                              <td className="numeric">
-                                {bytes(entry.destinationSize)}
+                              <td
+                                className={
+                                  page === "migrate" ? "reason-cell" : "numeric"
+                                }
+                                title={
+                                  page === "migrate"
+                                    ? entry.migrationReason
+                                    : undefined
+                                }
+                              >
+                                {page === "migrate"
+                                  ? entry.migrationReason
+                                  : bytes(entry.destinationSize)}
                               </td>
                               <td className="table-arrow">
                                 <button
@@ -1005,6 +1311,7 @@ export default function App() {
                             setStatus("");
                             setExtension("");
                             setMinSize("");
+                            setMigrationState("");
                           }}
                         >
                           Clear all filters
@@ -1024,11 +1331,16 @@ export default function App() {
                           className="text-button"
                           onClick={() => void selectMatching()}
                           disabled={
-                            running || !data.total || data.total > 10000
+                            running ||
+                            !data.total ||
+                            data.total > 10000 ||
+                            (page === "migrate" && migrationState === "skipped")
                           }
                           title="Select all matching files, up to 10,000"
                         >
-                          Select all {count(data.total)}
+                          {page === "migrate" && !migrationState
+                            ? "Select eligible"
+                            : `Select all ${count(data.total)}`}
                         </button>
                         <button
                           className="icon-button"
@@ -1353,7 +1665,7 @@ export default function App() {
         </main>
 
         <AnimatePresence>
-          {selected.size > 0 && page === "compare" && (
+          {selected.size > 0 && (page === "compare" || page === "migrate") && (
             <motion.div
               className="selection-tray"
               initial={{ opacity: 0 }}
@@ -1371,26 +1683,38 @@ export default function App() {
                   <X size={15} />
                 </button>
               </div>
-              <label>
-                <span className="sr-only">Action for selected files</span>
-                <select
-                  value={action}
-                  onChange={(e) => setAction(e.target.value as Action)}
-                  disabled={running}
-                >
-                  {Object.entries(actions).map(([key, value]) => (
-                    <option value={key} key={key}>
-                      {value.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {page === "migrate" ? (
+                <span className="migration-tray-note">
+                  Verified copies · Keep existing versions
+                </span>
+              ) : (
+                <label>
+                  <span className="sr-only">Action for selected files</span>
+                  <select
+                    value={action}
+                    onChange={(e) => setAction(e.target.value as Action)}
+                    disabled={running}
+                  >
+                    {Object.entries(actions).map(([key, value]) => (
+                      <option value={key} key={key}>
+                        {value.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <button
                 className="button primary"
-                onClick={() => void reviewAction()}
-                disabled={running || current?.state !== "complete"}
+                onClick={() =>
+                  void (page === "migrate" ? reviewMigration() : reviewAction())
+                }
+                disabled={
+                  running ||
+                  current?.state !== "complete" ||
+                  (page === "migrate" && !current?.options)
+                }
               >
-                Review
+                {page === "migrate" ? "Review migration" : "Review"}
                 <ArrowRight size={15} />
               </button>
             </motion.div>
@@ -1399,70 +1723,13 @@ export default function App() {
       </div>
 
       {showOptions && (
-        <Dialog title="Scan options" onClose={() => setShowOptions(false)}>
-          <div className="scan-options">
-            {" "}
-            <div>
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={options.verifyContents}
-                  disabled={running}
-                  onChange={(e) =>
-                    setOptions((v) => ({
-                      ...v,
-                      verifyContents: e.target.checked,
-                    }))
-                  }
-                />
-                <span>
-                  <strong>Verify contents</strong>
-                  <small>
-                    Required for quarantine. May download online-only files.
-                  </small>
-                </span>
-              </label>
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={options.collectOwners}
-                  disabled={running}
-                  onChange={(e) =>
-                    setOptions((v) => ({
-                      ...v,
-                      collectOwners: e.target.checked,
-                    }))
-                  }
-                />
-                <span>
-                  <strong>Include owners</strong>
-                  <small>Adds owner IDs. Slower on network shares.</small>
-                </span>
-              </label>
-            </div>
-            <label className="field-label">
-              Exclude types
-              <input
-                className="text-input"
-                value={excludedText}
-                onChange={(e) => setExcludedText(e.target.value)}
-                placeholder=".bak, .tmp, .log"
-                disabled={running}
-              />
-              <small>
-                Excluded files stay visible in results, with actions disabled.
-              </small>
-            </label>
-          </div>
-          <div className="dialog-actions">
-            <button
-              className="button primary"
-              onClick={() => setShowOptions(false)}
-            >
-              Done
-            </button>
-          </div>
-        </Dialog>
+        <RulesDialog
+          options={rulesDraft || options}
+          extensions={analysis.extensions.map((group) => group.label)}
+          initialSection={rulesSection}
+          onApply={applyRules}
+          onClose={() => setShowOptions(false)}
+        />
       )}
       {showFilters && (
         <Dialog title="Filters" onClose={() => setShowFilters(false)}>
@@ -1532,13 +1799,9 @@ export default function App() {
                 <div className="saved-pair" key={pair.id}>
                   <button
                     onClick={() => {
-                      setOptions(pair.options);
+                      setOptions(withRules(pair.options));
                       setShowPairs(false);
-                      setExcludedText(
-                        pair.options.excludedExtensions.join(", "),
-                      );
                       setScanId(null);
-                      setPage("compare");
                       setNotice(
                         `Loaded ${pair.name}. Compare to see current files.`,
                       );
@@ -1584,20 +1847,16 @@ export default function App() {
 
       {savePair && (
         <Dialog title="Save folder pair" onClose={() => setSavePair(false)}>
-          <p className="dialog-intro">Save these paths and scan options.</p>
+          <p className="dialog-intro">
+            Save these paths, rules, and scan settings.
+          </p>
           <form
             onSubmit={(e) => {
               e.preventDefault();
               void task(async () => {
                 await call("save_pair", {
                   name: pairName,
-                  options: {
-                    ...options,
-                    excludedExtensions: excludedText
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  },
+                  options,
                 });
                 await reload();
                 setSavePair(false);
@@ -1685,6 +1944,18 @@ export default function App() {
                 );
               })}
             </dd>
+            <dt>Migration</dt>
+            <dd>
+              {details.migrationReason ||
+                "Prepare again to classify this file."}
+            </dd>
+            {details.ruleReason &&
+              details.ruleReason !== details.migrationReason && (
+                <>
+                  <dt>Rule</dt>
+                  <dd>{details.ruleReason}</dd>
+                </>
+              )}
             <dt>Relative path</dt>
             <dd>{details.relativePath}</dd>
             <dt>Source size</dt>
@@ -1698,6 +1969,31 @@ export default function App() {
               </>
             )}
           </dl>
+          <div className="file-rule-actions">
+            <button
+              className="text-button"
+              disabled={running}
+              onClick={() => openRules(details.relativePath)}
+            >
+              Skip this file
+            </button>
+            {details.relativePath.includes("/") && (
+              <button
+                className="text-button"
+                disabled={running}
+                onClick={() =>
+                  openRules(
+                    details.relativePath.slice(
+                      0,
+                      details.relativePath.lastIndexOf("/") + 1,
+                    ),
+                  )
+                }
+              >
+                Skip this folder
+              </button>
+            )}
+          </div>
           <details className="metadata-details">
             <summary>Dates, owners & hashes</summary>
             <dl className="detail-list">
@@ -1706,13 +2002,13 @@ export default function App() {
               <dd>
                 {details.sourceModified
                   ? date(details.sourceModified / 1000000)
-                  : "—"}
+                  : "N/A"}
               </dd>
               <dt>Destination modified</dt>
               <dd>
                 {details.destinationModified
                   ? date(details.destinationModified / 1000000)
-                  : "—"}
+                  : "N/A"}
               </dd>
               {details.owner && (
                 <>
@@ -1751,7 +2047,10 @@ export default function App() {
                 toggle(details.id);
                 setDetails(null);
               }}
-              disabled={running}
+              disabled={
+                running ||
+                (page === "migrate" && details.migrationState === "skipped")
+              }
             >
               {selected.has(details.id) ? "Deselect file" : "Select file"}
             </button>
@@ -1784,6 +2083,18 @@ export default function App() {
             Files changed since the scan, occupied destinations, and unreadable
             files are skipped. Review outcomes in History.
           </p>
+          {review.preview.reviewEntryIds.length > 0 && (
+            <label className="check-label confirmation">
+              <input
+                type="checkbox"
+                checked={flagsApproved}
+                onChange={(e) => setFlagsApproved(e.target.checked)}
+              />
+              <span>
+                Approve {review.preview.reviewEntryIds.length} flagged files
+              </span>
+            </label>
+          )}
           <label className="check-label confirmation">
             <input
               type="checkbox"
@@ -1802,7 +2113,11 @@ export default function App() {
             <button
               className="button primary"
               onClick={() => void execute()}
-              disabled={!confirmed || !review.preview.eligible}
+              disabled={
+                !confirmed ||
+                !review.preview.eligible ||
+                (review.preview.reviewEntryIds.length > 0 && !flagsApproved)
+              }
             >
               {actions[review.request.action].verb}
               <ArrowRight size={15} />
@@ -1810,6 +2125,97 @@ export default function App() {
           </div>
         </Dialog>
       )}
+      {migrationReview &&
+        (() => {
+          const eligible = migrationReview.plans.reduce(
+            (n, plan) => n + plan.preview.eligible,
+            0,
+          );
+          const size = migrationReview.plans.reduce(
+            (n, plan) => n + plan.preview.bytes,
+            0,
+          );
+          const flagged = migrationReview.plans.reduce(
+            (n, plan) => n + plan.preview.reviewEntryIds.length,
+            0,
+          );
+          return (
+            <Dialog
+              title="Review migration"
+              onClose={() => setMigrationReview(null)}
+            >
+              <div className="review-summary">
+                <ShieldCheck size={24} />
+                <div>
+                  <strong>
+                    {count(eligible)} files · {bytes(size)}
+                  </strong>
+                  <span>
+                    {migrationReview.selectedCount - eligible} selected files
+                    skipped
+                  </span>
+                </div>
+              </div>
+              <dl className="detail-list">
+                <dt>Source</dt>
+                <dd>{current && readablePath(current.source)}</dd>
+                <dt>Destination</dt>
+                <dd>
+                  {current?.destination && readablePath(current.destination)}
+                </dd>
+                {migrationReview.plans.map((plan) => (
+                  <div className="detail-contents" key={plan.request.action}>
+                    <dt>
+                      {plan.request.action === "keep_both"
+                        ? "Keep both"
+                        : "Copy missing"}
+                    </dt>
+                    <dd>{count(plan.preview.eligible)} files</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="dialog-note">
+                Originals stay in place. Conflicts get a new filename. Changed
+                or unavailable files are skipped. Cleanup is a separate action
+                in History.
+              </p>
+              {flagged > 0 && (
+                <label className="check-label confirmation">
+                  <input
+                    type="checkbox"
+                    checked={flagsApproved}
+                    onChange={(e) => setFlagsApproved(e.target.checked)}
+                  />
+                  <span>Approve {flagged} flagged files</span>
+                </label>
+              )}
+              <label className="check-label confirmation">
+                <input
+                  type="checkbox"
+                  checked={confirmed}
+                  onChange={(e) => setConfirmed(e.target.checked)}
+                />
+                <span>I reviewed the folders and selected action.</span>
+              </label>
+              <div className="dialog-actions">
+                <button
+                  className="button secondary"
+                  onClick={() => setMigrationReview(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button primary"
+                  disabled={!confirmed || (flagged > 0 && !flagsApproved)}
+                  onClick={() => void executeMigration()}
+                >
+                  Start migration
+                  <ArrowRight size={15} />
+                </button>
+              </div>
+            </Dialog>
+          );
+        })()}
       {operationDetail && (
         <OperationDetails
           operation={operationDetail.operation}

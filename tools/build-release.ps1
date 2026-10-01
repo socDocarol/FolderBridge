@@ -37,7 +37,8 @@ try {
     $setupName = "FolderBridge_${version}_x64-setup.exe"
     Copy-Item -LiteralPath 'src-tauri\target\release\folderbridge.exe' -Destination (Join-Path $output $appName)
     Copy-Item -LiteralPath "src-tauri\target\release\bundle\nsis\$setupName" -Destination (Join-Path $output $setupName)
-    $checksums = foreach ($name in @($appName, $setupName)) {
+    Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $output 'LICENSE.txt')
+    $checksums = foreach ($name in @($appName, $setupName, 'LICENSE.txt')) {
         $hash = (Get-FileHash -LiteralPath (Join-Path $output $name) -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $name"
     }

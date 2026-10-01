@@ -26,7 +26,7 @@ describe("file action eligibility", () => {
     ).toBe(true);
   });
   it("formats absent sizes separately from empty files", () => {
-    expect(bytes(null)).toBe("—");
+    expect(bytes(null)).toBe("N/A");
     expect(bytes(0)).toBe("0 B");
   });
   it("shows readable Windows UNC paths", () => {

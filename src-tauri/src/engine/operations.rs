@@ -25,6 +25,8 @@ impl Engine {
             skipped: 0,
             bytes: 0,
             description: description.into(),
+            review_entry_ids: Vec::new(),
+            eligible_entry_ids: Vec::new(),
         };
         let mut seen = HashSet::new();
         let conn = self.store.connect()?;
@@ -35,6 +37,10 @@ impl Engine {
             let entry = Store::entry(&conn, request.scan_id, *id)?;
             if eligible(&entry, &request.action) {
                 preview.eligible += 1;
+                preview.eligible_entry_ids.push(entry.id);
+                if entry.rule_review || request.action == "keep_both" {
+                    preview.review_entry_ids.push(entry.id);
+                }
                 preview.bytes += if request.action == "copy_to_source"
                     || request.action == "quarantine_destination"
                 {
@@ -54,6 +60,14 @@ impl Engine {
         let preview = self.preview(&request)?;
         if preview.eligible == 0 {
             return Err("None of the selected files are eligible for this action.".into());
+        }
+        let approved: HashSet<i64> = request.approved_entry_ids.iter().copied().collect();
+        if preview
+            .review_entry_ids
+            .iter()
+            .any(|id| !approved.contains(id))
+        {
+            return Err("Some selected files require review. Approve their entry IDs before starting this operation.".into());
         }
         let scan = self.store.scan(request.scan_id)?;
         let (source, destination) = validate_roots(

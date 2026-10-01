@@ -13,6 +13,7 @@ fn options(source: &std::path::Path, destination: &std::path::Path) -> ScanOptio
         verify_contents: true,
         excluded_extensions: vec![],
         collect_owners: false,
+        rules: Default::default(),
     }
 }
 
@@ -84,6 +85,7 @@ fn copy_never_overwrites_a_destination_created_after_scan() {
             scan_id: id,
             entry_ids: vec![entry.id],
             action: "copy_to_destination".into(),
+            approved_entry_ids: vec![],
         })
         .unwrap();
     assert_eq!(
@@ -120,6 +122,7 @@ fn quarantine_is_verified_and_restorable_without_overwrites() {
             scan_id: id,
             entry_ids: vec![entry.id],
             action: "quarantine_destination".into(),
+            approved_entry_ids: vec![],
         })
         .unwrap();
     assert!(a.join("same.txt").exists());
@@ -153,6 +156,7 @@ fn changed_backup_blocks_cleanup() {
             scan_id: id,
             entry_ids: vec![entry.id],
             action: "quarantine_destination".into(),
+            approved_entry_ids: vec![],
         })
         .unwrap();
     assert_eq!(fs::read_to_string(b.join("same.txt")).unwrap(), "safe");
@@ -200,6 +204,7 @@ fn successful_copy_is_verified_and_preserves_both_original_files() {
             scan_id: scan,
             entry_ids: vec![entry.id],
             action: "copy_to_destination".into(),
+            approved_entry_ids: vec![],
         })
         .unwrap();
     assert_eq!(
@@ -250,6 +255,7 @@ fn cancelled_copy_preserves_source_and_publishes_no_partial_destination() {
             scan_id: scan,
             entry_ids: ids,
             action: "copy_to_destination".into(),
+            approved_entry_ids: vec![],
         })
     });
     let start = Instant::now();
@@ -298,6 +304,7 @@ fn restore_preserves_a_new_file_at_the_original_location() {
             scan_id: scan,
             entry_ids: vec![entry.id],
             action: "quarantine_destination".into(),
+            approved_entry_ids: vec![],
         })
         .unwrap();
     fs::write(b.join("same.txt"), "new version").unwrap();
@@ -337,7 +344,8 @@ fn quick_comparison_never_enables_cleanup() {
         .execute(OperationRequest {
             scan_id: scan,
             entry_ids: vec![entry.id],
-            action: "quarantine_destination".into()
+            action: "quarantine_destination".into(),
+            approved_entry_ids: vec![],
         })
         .is_err());
     assert!(b.join("same.txt").exists());
@@ -412,6 +420,7 @@ fn old_quarantine_operations_remain_restorable() {
             scan_id: scan,
             entry_ids: vec![entry.id],
             action: "quarantine_destination".into(),
+            approved_entry_ids: vec![],
         })
         .unwrap();
     let conn = engine.store.connect().unwrap();

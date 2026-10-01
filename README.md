@@ -4,7 +4,7 @@
 
 # FolderBridge
 
-**Compare folders, verify copies, and review cleanup in one small Windows app.**
+**Compare folders, plan migrations, verify copies, and review cleanup in one small Windows app.**
 
 FolderBridge shows what is missing, different, or identical between two folders. Copy the files you need, check the results, and remove originals only when you choose to. Every folder is selected by you, so the same app works with local folders, mapped drives, accessible network shares, and OneDrive-synced SharePoint libraries.
 
@@ -24,6 +24,7 @@ Built with **Tauri 2, Rust, React, TypeScript, and SQLite**. No FolderBridge acc
 | Check whether matching files are really equal | Use SHA-256 content verification, enabled by default. Equal size alone is never labeled identical. |
 | Copy only what is missing | Copy source-only files to the destination, or recover destination-only files to the source. |
 | Preserve conflicting versions | Keep both by giving the copied source version a new name. Existing files are not overwritten. |
+| Control what gets migrated | Skip types, files, folders, or sizes; flag files that need approval before copying. |
 | Finish a migration | Review successful copies, inspect both paths, and separately confirm cleanup of their originals. |
 | Review duplicate copies | Move verified destination duplicates into a reversible quarantine. |
 | Understand storage | See totals by file type and folder, plus average, median, and quartile file sizes. |
@@ -31,14 +32,16 @@ Built with **Tauri 2, Rust, React, TypeScript, and SQLite**. No FolderBridge acc
 
 Use it for a folder handoff, a network-drive migration, a comparison with a synced document library, or a check before removing duplicate copies. It is an on-demand review tool; it does not continuously synchronize folders.
 
+Four tabs keep each task focused: **Compare** checks folder differences, **Migrate** prepares and copies selected files, **Storage** explains space usage, and **History** records operations and handles cleanup or restoration.
+
 ## Download and run
 
 Open the [latest release](https://github.com/socDocarol/FolderBridge/releases/latest) and choose:
 
 | File | Use it when |
 | --- | --- |
-| `FolderBridge_0.3.0.exe` | You want to run the app directly without installing FolderBridge. |
-| `FolderBridge_0.3.0_x64-setup.exe` | You want a per-user installation. Setup can download WebView2 if it is missing. |
+| `FolderBridge_0.4.0.exe` | You want to run the app directly without installing FolderBridge. |
+| `FolderBridge_0.4.0_x64-setup.exe` | You want a per-user installation. Setup can download WebView2 if it is missing. |
 | `SHA256SUMS.txt` | You want to check that a download matches the published build. |
 
 **Requirements:** Windows x64, Microsoft Edge WebView2, and permission to read the selected folders. Copying and cleanup also require the relevant write or move permissions. The app uses your Windows access; it does not mount drives or sign in to SharePoint.
@@ -48,7 +51,7 @@ The current build is unsigned, so Windows may show an unknown-publisher warning.
 To check a download in PowerShell:
 
 ```powershell
-Get-FileHash .\FolderBridge_0.3.0.exe -Algorithm SHA256
+Get-FileHash .\FolderBridge_0.4.0.exe -Algorithm SHA256
 ```
 
 Compare the hash with `SHA256SUMS.txt` from the same release. The standalone app still stores its history in your Windows profile; moving the EXE does not move that history.
@@ -56,7 +59,7 @@ Compare the hash with `SHA256SUMS.txt` from the same release. The standalone app
 ## Quick start
 
 1. **Choose folders.** Browse to a source and destination, or paste their paths. Leave the destination empty to inventory one folder.
-2. **Compare.** Keep **Verify contents** enabled for content matching. The comparison reads files without changing them.
+2. **Set rules and compare.** Open **Rules** for exclusions, size limits, or review flags. Keep **Verify contents** enabled for content matching. The comparison reads files without changing them.
 3. **Review the results.** Search or filter by status, file type, or minimum size. Click a filename for details; use Explorer buttons to inspect either location.
 4. **Choose an action.** Select files, choose the action, and select **Review**. Check the folders and eligible count before confirming.
 5. **Check the outcome.** Open the operation in **History**. If you want to remove copied originals, use **Review cleanup** there. Compare again to refresh the results after changes.
@@ -85,7 +88,7 @@ Files are matched by their **relative path**, not just their filename or content
 | **Identical** | Both files have matching verified SHA-256 contents. |
 | **Different** | The sizes differ, or content verification found different bytes. |
 | **Not verified** | Both paths exist with the same size, but content verification was disabled. |
-| **Excluded** | A selected file-type exclusion applies; the row stays visible without an action. |
+| **Excluded** | A skip rule applies to the type, path, or size; the row stays visible with its reason and cannot be copied from that scan. |
 | **Issue** | A path could not be read or checked. Inspect the reason before proceeding. |
 | **Inventoried** | The file was found in a single-folder scan with no destination selected. |
 
@@ -102,6 +105,45 @@ Turning verification off makes the initial comparison faster because it avoids c
 | **Review cleanup** in History | Successful copy with a valid identity record | Recheck the copied file and original, then perform the separately confirmed original cleanup. |
 
 **Keep both** uses a name such as `Report (source copy 12).pdf`, where `12` is the operation ID. It does not choose which version is correct.
+
+## Migrate with a reviewed plan
+
+![Migration plan grouped into Ready, Review, and Skipped, with reasons for each file](docs/images/migrate.png)
+
+1. Open **Migrate**, choose both folders, and adjust **Rules**.
+2. Select **Prepare**. The app compares the folders without changing files.
+3. Inspect **Ready**, **Review**, and **Skipped**. Select individual files, a page, or **Select eligible**.
+4. Choose **Review migration**. Check the copy counts and folder paths. Explicitly approve flagged files before **Start migration** becomes available.
+5. Inspect the outcome in **History**. Originals remain until you separately choose and confirm cleanup.
+
+| Decision | What happens |
+| --- | --- |
+| **Ready** | A source-only file can copy to its matching destination path. |
+| **Review** | A rule flagged the file, or an existing destination differs. Approval is required; conflicts use **Keep both**. |
+| **Skipped** | A skip rule applies, or the result cannot migrate forward: identical, destination-only, unverified, inventory-only, or an issue. The reason stays visible. |
+
+A selection can contain both missing files and conflicts. The app runs the missing-file and Keep both batches in sequence; **History records each batch separately**. Cancellation or a batch error stops the remaining work. Completed copies remain available for inspection and cleanup.
+
+Prepared results are a snapshot, not a live folder view. Compare or prepare again after file changes. Comparisons saved before version 0.4 have no rules snapshot and must be prepared again before using Migrate.
+
+## Rules shared by Compare and Migrate
+
+![Rules dialog with backup presets and Include, Skip, or Review choices per file type](docs/images/rules.png)
+
+Both tabs use the same rules. **Apply rules** updates the current folder pair and clears an outdated comparison; **Save pair** stores the folders and rules for reuse. Each new comparison also records its own rules, so opening History does not reinterpret old results using your latest settings.
+
+| Rules page | Controls |
+| --- | --- |
+| **Types** | Choose **Include**, **Skip**, or **Review** for an extension. Add a type such as `.bac`, or use backup and temporary-file presets. |
+| **Sizes** | Set minimum/maximum included size, flag files above a size, or flag Access databases above a separate size. |
+| **Files** | Pick individual source files or folders, or enter relative paths. `Archive/` skips that folder's contents; `Reports/old.pdf` skips one path. |
+| **Scan** | Toggle content verification and Windows owner collection. |
+
+The backup preset covers `.bak`, `.bac`, `.bacpac`, and `.dmp`; the temporary preset covers `.tmp`, `.temp`, `.log`, and `.trc`. Presets are optional. No types, paths, or sizes are excluded by default. You can also open a result's details and choose **Skip this file** or **Skip this folder**.
+
+Size inputs use **MiB** (1 MiB = 1,048,576 bytes). Blank means no limit. Minimum and maximum include the boundary value; a review threshold flags files strictly above it. Rules use the source size when available, otherwise the destination size. Access-specific flags apply to `.mdb` and `.accdb`.
+
+**Skip takes priority over Review.** Skipped rows remain searchable and exportable, but do not participate in copy operations. Review flags require explicit approval in both Compare actions and Migrate; conflicting versions always require review. Changing rules never relaxes original-cleanup checks.
 
 ## Inspect files without searching for them
 
@@ -212,7 +254,7 @@ Export three kinds of CSV:
 
 | Report | Contains |
 | --- | --- |
-| Inventory/comparison | Relative path, status, extension, sizes, modification times, available hashes, owner IDs, and issues. Current filters apply. |
+| Inventory/comparison | Relative path, status, extension, sizes, modification times, available hashes, owner IDs, issues, rule flags/reasons, and migration decisions/reasons. Current filters apply. |
 | Size statistics | File counts and size distributions by extension. |
 | Operation log | Original/copy paths, outcome, hash, cleanup method/state, recovery path, and messages. |
 
@@ -257,7 +299,7 @@ For a Windows release:
 .\tools\build-release.ps1
 ```
 
-The script builds the EXE and NSIS installer, remaps compiler paths to remove local profile names, and writes versioned assets plus `SHA256SUMS.txt` into `release/public-v<version>/`. It restores the process's build environment afterward. Inspect release assets before publishing; this is a path-remapping measure, not a signing service or a promise of byte-for-byte reproducible builds.
+The script builds the EXE and NSIS installer, remaps compiler paths to remove local profile names, and writes versioned assets, `LICENSE.txt`, and `SHA256SUMS.txt` into `release/public-v<version>/`. It restores the process's build environment afterward. Inspect release assets before publishing; this is a path-remapping measure, not a signing service or a promise of byte-for-byte reproducible builds.
 
 ### Verify changes
 
@@ -270,7 +312,7 @@ npm run test:e2e
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-Version 0.3.0 validation includes **37 Rust tests, 3 frontend unit tests, and 8 browser checks**, plus native Windows scan/copy/cleanup/restore, Explorer navigation, CSV export, and a disposable-file Recycle Bin round trip. These checks do not establish live SharePoint or SMB behavior.
+Version 0.4.0 validation includes **42 Rust tests, 5 frontend unit tests, and 11 browser checks**, plus native Windows scan/copy/cleanup/restore, mixed migrations, rule approval, skipped-file preservation, Explorer navigation, and CSV export. The preceding release also passed a disposable-file Recycle Bin round trip. These checks do not establish live SharePoint or SMB behavior.
 
 For isolated native smoke testing, launch a test build with separate app and WebView2 data directories, then run the included harness:
 
@@ -279,8 +321,9 @@ $testProfile = Join-Path (Get-Location) ('qa\native-' + [guid]::NewGuid().ToStri
 $env:FOLDERBRIDGE_DATA_DIR = $testProfile
 $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $testProfile 'webview'
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9227'
-Start-Process '.\release\public-v0.3.0\FolderBridge_0.3.0.exe' -WindowStyle Hidden
+Start-Process '.\release\public-v0.4.0\FolderBridge_0.4.0.exe' -WindowStyle Hidden
 node tests/native-smoke.mjs
+node tests/native-migrate.mjs
 ```
 
 Use a separate terminal for this test profile. The harness creates disposable fixtures and opens Explorer for them. Close its test windows and app afterward. Release builds do not enable remote debugging themselves.
@@ -293,6 +336,7 @@ src-tauri/src/engine/         Comparison, copy, cleanup, and report logic
 src-tauri/src/cleanup_native.rs  Windows identity, stream checks, and recycling
 src-tauri/src/paths.rs        Path containment and no-overwrite moves
 src-tauri/src/storage.rs      SQLite inventory and operation journal
+src-tauri/src/policy.rs       Shared skip/review rules and migration decisions
 src-tauri/src/reveal.rs       Validated Explorer navigation
 src-tauri/tests/              Disposable filesystem safety tests
 tests/                       Browser and native smoke checks

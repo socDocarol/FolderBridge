@@ -27,7 +27,7 @@ fn reveals_existing_file_and_nearest_missing_parent_from_the_same_scan() {
     let destination = temp.path().join("destination");
     fs::create_dir_all(source.join("shared/deeper")).unwrap();
     fs::create_dir_all(destination.join("shared")).unwrap();
-    fs::write(source.join("shared/deeper/notes, café & plan.txt"), "data").unwrap();
+    fs::write(source.join("shared/deeper/notes, cafÃ© & plan.txt"), "data").unwrap();
     fs::write(destination.join("destination-only.txt"), "other").unwrap();
     let engine = Engine::open(&temp.path().join("app.sqlite")).unwrap();
     let scan = engine
@@ -37,6 +37,7 @@ fn reveals_existing_file_and_nearest_missing_parent_from_the_same_scan() {
             verify_contents: false,
             excluded_extensions: vec![],
             collect_owners: false,
+            rules: Default::default(),
         })
         .unwrap();
     let entries = engine
@@ -52,7 +53,7 @@ fn reveals_existing_file_and_nearest_missing_parent_from_the_same_scan() {
     assert!(existing.select_file);
     assert_eq!(
         existing.path,
-        fs::canonicalize(source.join("shared/deeper/notes, café & plan.txt")).unwrap()
+        fs::canonicalize(source.join("shared/deeper/notes, cafÃ© & plan.txt")).unwrap()
     );
     let missing = entry_target(&engine.store, scan, source_file.id, "destination").unwrap();
     assert!(!missing.select_file);

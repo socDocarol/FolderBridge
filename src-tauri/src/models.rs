@@ -11,6 +11,24 @@ pub struct ScanOptions {
     pub excluded_extensions: Vec<String>,
     #[serde(default)]
     pub collect_owners: bool,
+    #[serde(default)]
+    pub rules: FileRules,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRules {
+    #[serde(default)]
+    pub excluded_paths: Vec<String>,
+    #[serde(default)]
+    pub min_size: Option<u64>,
+    #[serde(default)]
+    pub max_size: Option<u64>,
+    #[serde(default)]
+    pub review_above: Option<u64>,
+    #[serde(default)]
+    pub review_access_above: Option<u64>,
+    #[serde(default)]
+    pub review_extensions: Vec<String>,
 }
 fn yes() -> bool {
     true
@@ -43,6 +61,7 @@ pub struct Scan {
     pub verified: bool,
     pub files: u64,
     pub errors: u64,
+    pub options: Option<ScanOptions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +82,10 @@ pub struct Entry {
     pub destination_hash: Option<String>,
     pub owner: Option<String>,
     pub issue: Option<String>,
+    pub rule_review: bool,
+    pub rule_reason: String,
+    pub migration_state: String,
+    pub migration_reason: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -73,6 +96,8 @@ pub struct EntryFilter {
     pub search: String,
     #[serde(default)]
     pub status: String,
+    #[serde(default)]
+    pub migration_state: String,
     #[serde(default)]
     pub extension: String,
     #[serde(default)]
@@ -102,6 +127,7 @@ pub struct GroupTotal {
 #[serde(rename_all = "camelCase")]
 pub struct Analysis {
     pub statuses: Vec<GroupTotal>,
+    pub migration_states: Vec<GroupTotal>,
     pub extensions: Vec<GroupTotal>,
     pub folders: Vec<GroupTotal>,
     pub source_bytes: u64,
@@ -127,6 +153,8 @@ pub struct OperationRequest {
     pub scan_id: i64,
     pub entry_ids: Vec<i64>,
     pub action: String,
+    #[serde(default)]
+    pub approved_entry_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +165,8 @@ pub struct Preview {
     pub skipped: u64,
     pub bytes: u64,
     pub description: String,
+    pub review_entry_ids: Vec<i64>,
+    pub eligible_entry_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

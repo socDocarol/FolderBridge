@@ -15,6 +15,7 @@ import type {
   Status,
 } from "./types";
 import { actions, isEligible } from "./format";
+import { emptyRules } from "./rules";
 
 // Development-only fixture transport. This module is eliminated from production.
 const folders = {
@@ -30,6 +31,13 @@ let scans: Scan[] = [
     verified: true,
     files: 18,
     errors: 0,
+    options: {
+      ...folders,
+      verifyContents: true,
+      collectOwners: false,
+      excludedExtensions: [],
+      rules: emptyRules,
+    },
   },
 ];
 const samples: [string, Status, number][] = [
@@ -52,7 +60,7 @@ const samples: [string, Status, number][] = [
   ["Training/Reference guide.pdf", "identical", 4280000],
   ["Working files/Readme.txt", "destination_only", 2400],
 ];
-let entries: Entry[] = samples.map(([path, status, size], i) => ({
+const initialEntries: Entry[] = samples.map(([path, status, size], i) => ({
   id: i + 1,
   scanId: 1,
   relativePath: path,
@@ -73,7 +81,93 @@ let entries: Entry[] = samples.map(([path, status, size], i) => ({
   destinationHash: status === "identical" ? "a".repeat(64) : null,
   owner: null,
   issue: null,
+  ruleReview: false,
+  ruleReason: "",
+  migrationState:
+    status === "source_only"
+      ? "ready"
+      : status === "different"
+        ? "review"
+        : "skipped",
+  migrationReason:
+    status === "source_only"
+      ? "Ready to copy"
+      : status === "different"
+        ? "Different version; keep both"
+        : status === "identical"
+          ? "Already identical"
+          : "Only in destination",
 }));
+let entries = initialEntries;
+const scanEntries = new Map<number, Entry[]>([[1, entries]]);
+function rowsFor(id: number) {
+  return scanEntries.get(id) || [];
+}
+function applyRules(entry: Entry, options: ScanOptions): Entry {
+  const rules = { ...emptyRules, ...options.rules };
+  const size = entry.sourceSize ?? entry.destinationSize ?? 0;
+  const path = entry.relativePath.toLowerCase();
+  const skip = options.excludedExtensions
+    .map((v) => v.toLowerCase())
+    .includes(entry.extension)
+    ? `Skipped file type ${entry.extension}`
+    : rules.excludedPaths.some((v) => {
+          const p = v.toLowerCase().replaceAll("\\", "/");
+          return p.endsWith("/") ? path.startsWith(p) : p === path;
+        })
+      ? "Skipped path rule"
+      : rules.minSize != null && size < rules.minSize
+        ? "Below minimum file size"
+        : rules.maxSize != null && size > rules.maxSize
+          ? "Above maximum file size"
+          : "";
+  const review = rules.reviewExtensions.includes(entry.extension)
+    ? "File type requires review"
+    : rules.reviewAbove != null && size > rules.reviewAbove
+      ? "File size requires review"
+      : [".mdb", ".accdb"].includes(entry.extension) &&
+          rules.reviewAccessAbove != null &&
+          size > rules.reviewAccessAbove
+        ? "Access database size requires review"
+        : "";
+  const status = skip
+    ? "excluded"
+    : !options.destination
+      ? "inventory"
+      : !options.verifyContents && entry.status === "identical"
+        ? "unverified"
+        : entry.status;
+  const migrationState =
+    status === "source_only"
+      ? review
+        ? "review"
+        : "ready"
+      : status === "different"
+        ? "review"
+        : "skipped";
+  const reason =
+    skip ||
+    (status === "different"
+      ? "Different version; keep both"
+      : status === "source_only"
+        ? review || "Ready to copy"
+        : status === "identical"
+          ? "Already identical"
+          : status === "unverified"
+            ? "Contents were not verified"
+            : status === "inventory"
+              ? "No destination was compared"
+              : "Only in destination");
+  return {
+    ...entry,
+    status,
+    ruleReview: !skip && !!review,
+    ruleReason: skip || review,
+    issue: skip || null,
+    migrationState,
+    migrationReason: reason,
+  };
+}
 let progress: Progress = {
   running: false,
   kind: "",
@@ -92,15 +186,17 @@ const items: OperationItem[] = [];
 const pairs: SavedPair[] = [];
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 function filtered(filter: EntryFilter) {
-  return entries.filter(
+  return rowsFor(filter.scanId).filter(
     (e) =>
       (!filter.status || e.status === filter.status) &&
+      (!filter.migrationState || e.migrationState === filter.migrationState) &&
       (!filter.extension || e.extension === filter.extension) &&
       e.relativePath.toLowerCase().includes(filter.search.toLowerCase()) &&
       Math.max(e.sourceSize || 0, e.destinationSize || 0) >= filter.minSize,
   );
 }
-function analysis(): Analysis {
+function analysis(scanId: number): Analysis {
+  const entries = rowsFor(scanId);
   const group = (key: (entry: Entry) => string) => {
     const map = new Map<
       string,
@@ -143,6 +239,7 @@ function analysis(): Analysis {
   return {
     sizeStatistics,
     statuses: group((e) => e.status),
+    migrationStates: group((e) => e.migrationState),
     extensions: group((e) => e.extension),
     folders: group((e) => e.relativePath.split("/")[0]),
     sourceBytes: entries.reduce((n, e) => n + (e.sourceSize || 0), 0),
@@ -183,7 +280,7 @@ export async function demoCall<T>(
       result = filtered(args.filter as EntryFilter).map((e) => e.id);
       break;
     case "get_analysis":
-      result = analysis();
+      result = analysis(args.scanId as number);
       break;
     case "scan_folders": {
       const options = args.options as ScanOptions;
@@ -215,18 +312,16 @@ export async function demoCall<T>(
           verified: options.verifyContents,
           files: entries.length,
           errors: 0,
+          options: structuredClone(options),
         },
         ...scans,
       ];
-      entries = entries.map((e) => ({
-        ...e,
-        scanId: id,
-        status: !options.destination
-          ? "inventory"
-          : !options.verifyContents && e.status === "identical"
-            ? "unverified"
-            : e.status,
-      }));
+      entries = initialEntries
+        .filter((e) => options.destination || e.sourceRelative)
+        .map((e) =>
+          applyRules({ ...e, id: id * 1000 + e.id, scanId: id }, options),
+        );
+      scanEntries.set(id, entries);
       progress = {
         ...progress,
         running: false,
@@ -243,10 +338,16 @@ export async function demoCall<T>(
       break;
     case "preview_operation": {
       const request = args.request as OperationRequest;
-      const selected = entries.filter((e) => request.entryIds.includes(e.id));
+      const selected = rowsFor(request.scanId).filter((e) =>
+        request.entryIds.includes(e.id),
+      );
       const valid = selected.filter((e) => isEligible(e, request.action));
       result = {
         action: request.action,
+        eligibleEntryIds: valid.map((entry) => entry.id),
+        reviewEntryIds: valid
+          .filter((e) => e.ruleReview || request.action === "keep_both")
+          .map((e) => e.id),
         eligible: valid.length,
         skipped: selected.length - valid.length,
         bytes: valid.reduce(
@@ -262,9 +363,17 @@ export async function demoCall<T>(
     }
     case "execute_operation": {
       const request = args.request as OperationRequest;
-      const selected = entries.filter(
+      const selected = rowsFor(request.scanId).filter(
         (e) => request.entryIds.includes(e.id) && isEligible(e, request.action),
       );
+      if (
+        selected.some(
+          (e) =>
+            (e.ruleReview || request.action === "keep_both") &&
+            !request.approvedEntryIds?.includes(e.id),
+        )
+      )
+        throw new Error("Approve flagged files before copying.");
       const id = operations.length + 1;
       progress = {
         ...progress,
@@ -274,6 +383,10 @@ export async function demoCall<T>(
         total: selected.length,
       };
       await delay(800);
+      if (!progress.running) {
+        result = id;
+        break;
+      }
       operations.unshift({
         id,
         scanId: request.scanId,

@@ -1,9 +1,18 @@
+export type FileRules = {
+  excludedPaths: string[];
+  minSize: number | null;
+  maxSize: number | null;
+  reviewAbove: number | null;
+  reviewAccessAbove: number | null;
+  reviewExtensions: string[];
+};
 export type ScanOptions = {
   source: string;
   destination: string | null;
   verifyContents: boolean;
   excludedExtensions: string[];
   collectOwners: boolean;
+  rules: FileRules;
 };
 export type Scan = {
   id: number;
@@ -14,6 +23,7 @@ export type Scan = {
   verified: boolean;
   files: number;
   errors: number;
+  options: ScanOptions | null;
 };
 export type Status =
   | "source_only"
@@ -41,11 +51,16 @@ export type Entry = {
   destinationHash: string | null;
   owner: string | null;
   issue: string | null;
+  ruleReview: boolean;
+  ruleReason: string;
+  migrationState: "ready" | "review" | "skipped";
+  migrationReason: string;
 };
 export type EntryFilter = {
   scanId: number;
   search: string;
   status: string;
+  migrationState: string;
   extension: string;
   minSize: number;
   offset: number;
@@ -55,6 +70,7 @@ export type EntryPage = { entries: Entry[]; total: number };
 export type GroupTotal = { label: string; count: number; bytes: number };
 export type Analysis = {
   statuses: GroupTotal[];
+  migrationStates: GroupTotal[];
   extensions: GroupTotal[];
   folders: GroupTotal[];
   sourceBytes: number;
@@ -84,6 +100,7 @@ export type OperationRequest = {
   scanId: number;
   entryIds: number[];
   action: Action;
+  approvedEntryIds?: number[];
 };
 export type Preview = {
   action: Action;
@@ -91,6 +108,8 @@ export type Preview = {
   skipped: number;
   bytes: number;
   description: string;
+  reviewEntryIds: number[];
+  eligibleEntryIds: number[];
 };
 export type Operation = {
   id: number;

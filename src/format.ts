@@ -1,7 +1,7 @@
 import type { Action, Entry, Status } from "./types";
 
 export function bytes(value: number | null | undefined): string {
-  if (value == null) return "—";
+  if (value == null) return "N/A";
   if (value === 0) return "0 B";
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 5);
   return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: index < 2 ? 0 : 1 }).format(value / 1024 ** index)} ${["B", "KB", "MB", "GB", "TB", "PB"][index]}`;

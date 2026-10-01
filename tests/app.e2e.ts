@@ -55,9 +55,10 @@ test("folder pairs, quick scan, and keyboard dialog dismissal work", async ({
     page.getByRole("button", { name: "Review pair", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Review pair", exact: true }).click();
-  await page.getByRole("button", { name: "Scan options" }).click();
+  await page.getByRole("button", { name: "Rules" }).click();
+  await page.getByRole("tab", { name: "Scan", exact: true }).click();
   await page.getByLabel("Verify contents", { exact: false }).uncheck();
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.getByRole("button", { name: "Apply rules", exact: true }).click();
   await page
     .getByRole("button", { name: "Compare", exact: true })
     .last()
