@@ -311,4 +311,4 @@ Small, focused changes are easiest to review. File-changing behavior should incl
 
 ## License
 
-No license has been selected for this repository yet.
+[MIT](LICENSE) © 2026 socDocarol.

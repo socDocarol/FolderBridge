@@ -1,6 +1,7 @@
 [package]
 name = "folderbridge"
 version = "0.3.0"
+license = "MIT"
 description = "Verified folder comparison and migration"
 authors = ["FolderBridge"]
 edition = "2021"
