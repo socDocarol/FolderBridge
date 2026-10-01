@@ -1,0 +1,40 @@
+{
+  "name": "folderbridge",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 1421",
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "test": "vitest run",
+    "test:engine": "cargo test --manifest-path src-tauri/Cargo.toml --no-default-features",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "lucide-react": "^0.577.0",
+    "motion": "^12.35.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@paper-design/shaders-react": "latest",
+    "@playwright/test": "^1.58.2",
+    "@tauri-apps/cli": "^2.12.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "latest",
+    "@vitejs/plugin-react": "^5.1.0",
+    "gsap": "^3.14.2",
+    "prettier": "^3.9.9",
+    "three": "latest",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18"
+  }
+}

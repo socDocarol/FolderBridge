@@ -1,0 +1,13 @@
+:root {
+  --font:
+    "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    sans-serif;
+  --canvas: #f9fbfa;
+  --surface: #ffffff;
+  --sidebar: #f3f6f4;
+  --ink: #24382e;
+  --muted: #64766b;
+  --accent: #176b51;
+  --accent-soft: #e5f0e9;
+  --line: #dfe7e1;
+}

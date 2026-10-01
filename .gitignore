@@ -1,0 +1,24 @@
+# Dependencies and generated output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+test-results/
+playwright-report/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# Local builds, test profiles, and migration references
+/release/
+/qa/
+/scripts/
+/PRODUCT.md
+/DESIGN.md
+
+# Local credentials and settings
+.env
+.env.*
+*.pfx
+*.pem
+*.key
