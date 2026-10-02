@@ -81,6 +81,7 @@ type Page = "compare" | "migrate" | "insights" | "history";
 const emptyOptions: ScanOptions = {
   source: "",
   destination: "",
+  compareBothWays: false,
   verifyContents: true,
   excludedExtensions: [],
   collectOwners: false,
@@ -94,6 +95,7 @@ const pageNames: Record<Page, string> = {
 };
 const blankAnalysis: Analysis = {
   statuses: [],
+  sourceStatuses: [],
   migrationStates: [],
   extensions: [],
   folders: [],
@@ -106,6 +108,10 @@ const blankAnalysis: Analysis = {
 export default function App() {
   const [page, setPage] = useState<Page>("compare");
   const [options, setOptions] = useState<ScanOptions>(emptyOptions);
+  const sourceOnly =
+    page === "compare" &&
+    Boolean(options.destination) &&
+    !options.compareBothWays;
   const [scans, setScans] = useState<Scan[]>([]);
   const [scanId, setScanId] = useState<number | null>(null);
   const [pairs, setPairs] = useState<SavedPair[]>([]);
@@ -115,7 +121,17 @@ export default function App() {
   const [loadedRows, setData] = useState<EntryPage>({ entries: [], total: 0 });
   const data = loadedRows.entries.some((entry) => entry.scanId !== scanId)
     ? { entries: [], total: 0 }
-    : loadedRows;
+    : sourceOnly
+      ? {
+          ...loadedRows,
+          entries: loadedRows.entries.filter(
+            (entry) =>
+              entry.sourceRelative != null ||
+              entry.destinationRelative == null ||
+              entry.status === "error",
+          ),
+        }
+      : loadedRows;
   const [analysis, setAnalysis] = useState<Analysis>(blankAnalysis);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -171,6 +187,7 @@ export default function App() {
   const filter = useMemo<EntryFilter>(
     () => ({
       scanId: scanId || 0,
+      sourceOnly,
       search: deferredSearch,
       status,
       migrationState: page === "migrate" ? migrationState : "",
@@ -181,6 +198,7 @@ export default function App() {
     }),
     [
       scanId,
+      sourceOnly,
       deferredSearch,
       status,
       migrationState,
@@ -276,7 +294,8 @@ export default function App() {
   useEffect(() => {
     setSelected(new Set());
     setDetails(null);
-  }, [scanId]);
+    if (sourceOnly) setAction("copy_to_destination");
+  }, [scanId, sourceOnly]);
 
   useEffect(() => {
     const element = tableRef.current;
@@ -467,6 +486,7 @@ export default function App() {
     setBusy(false);
   }
   async function selectMatching() {
+    setBusy(true);
     await task(async () => {
       let ids: number[];
       if (page === "migrate" && !migrationState) {
@@ -485,6 +505,7 @@ export default function App() {
         throw new Error("Select up to 10,000 files. Narrow the filters first.");
       setSelected(next);
     });
+    setBusy(false);
   }
   async function loadOlder(kind: "scans" | "operations") {
     await task(async () => {
@@ -614,6 +635,16 @@ export default function App() {
     setOptions((v) => ({ ...v, [side]: value }));
     setScanId(null);
   }
+  function changeDirection(compareBothWays: boolean) {
+    setOptions((old) => ({ ...old, compareBothWays }));
+    setStatus("");
+    setOffset(0);
+    setSelected(new Set());
+    setDetails(null);
+    setReview(null);
+    setData({ entries: [], total: 0 });
+    setAction("copy_to_destination");
+  }
   function loadScan(s: Scan) {
     setScanId(s.id);
     setOptions(scanOptions(s));
@@ -677,8 +708,11 @@ export default function App() {
   );
   const allPageSelected =
     selectable.length > 0 && selectable.every((e) => selected.has(e.id));
+  const comparisonStatuses = sourceOnly
+    ? analysis.sourceStatuses
+    : analysis.statuses;
   const statusCount = (value: string) =>
-    analysis.statuses.find((s) => s.label === value)?.count || 0;
+    comparisonStatuses.find((s) => s.label === value)?.count || 0;
 
   return (
     <div className="app-shell">
@@ -893,6 +927,22 @@ export default function App() {
                       Save pair
                     </button>
                   </div>
+                  {page === "compare" && (
+                    <label
+                      className="direction-toggle"
+                      title="Include files found only in the destination. Switch views without rescanning."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={options.compareBothWays}
+                        onChange={(event) =>
+                          changeDirection(event.target.checked)
+                        }
+                        disabled={running || !options.destination?.trim()}
+                      />
+                      Compare both ways
+                    </label>
+                  )}
                   <div className="setup-actions">
                     <button
                       className="text-button"
@@ -922,6 +972,7 @@ export default function App() {
                   </div>
                 </div>
                 <p className="rules-summary" title={rulesSummary(options)}>
+                  {sourceOnly ? "Source to destination · " : ""}
                   {rulesSummary(options)}
                 </p>
               </section>
@@ -938,7 +989,15 @@ export default function App() {
                     <Clock3 size={13} />
                     {date(current.startedAt)}
                     <span className="meta-divider">·</span>
-                    {count(current.files)} paths
+                    {count(
+                      sourceOnly
+                        ? comparisonStatuses.reduce(
+                            (total, group) => total + group.count,
+                            0,
+                          )
+                        : current.files,
+                    )}{" "}
+                    paths
                     <span className="meta-divider">·</span>
                     {current.verified ? "Verification on" : "Quick comparison"}
                   </span>
@@ -1003,7 +1062,7 @@ export default function App() {
               )}
               {current && page === "compare" && (
                 <div
-                  className="comparison-summary"
+                  className={`comparison-summary ${sourceOnly ? "one-way-summary" : ""}`}
                   aria-label="Comparison summary"
                 >
                   {(
@@ -1021,25 +1080,29 @@ export default function App() {
                         icon: Undo2,
                       },
                     ] as const
-                  ).map((item) => (
-                    <button
-                      key={item.id}
-                      className={`summary-item ${status === item.id ? "selected" : ""}`}
-                      onClick={() =>
-                        setStatus(status === item.id ? "" : item.id)
-                      }
-                      aria-pressed={status === item.id}
-                    >
-                      <span className={`summary-symbol symbol-${item.id}`}>
-                        <item.icon size={17} />
-                      </span>
-                      <span>
-                        {item.label}
-                        <strong>{count(statusCount(item.id))}</strong>
-                      </span>
-                      <ChevronRight size={14} />
-                    </button>
-                  ))}
+                  )
+                    .filter(
+                      (item) => !sourceOnly || item.id !== "destination_only",
+                    )
+                    .map((item) => (
+                      <button
+                        key={item.id}
+                        className={`summary-item ${status === item.id ? "selected" : ""}`}
+                        onClick={() =>
+                          setStatus(status === item.id ? "" : item.id)
+                        }
+                        aria-pressed={status === item.id}
+                      >
+                        <span className={`summary-symbol symbol-${item.id}`}>
+                          <item.icon size={17} />
+                        </span>
+                        <span>
+                          {item.label}
+                          <strong>{count(statusCount(item.id))}</strong>
+                        </span>
+                        <ChevronRight size={14} />
+                      </button>
+                    ))}
                 </div>
               )}
 
@@ -1097,11 +1160,15 @@ export default function App() {
                               skipped: "Skipped",
                             }
                           : statuses,
-                      ).map(([key, label]) => (
-                        <option key={key} value={key}>
-                          {label}
-                        </option>
-                      ))}
+                      )
+                        .filter(
+                          ([key]) => !sourceOnly || key !== "destination_only",
+                        )
+                        .map(([key, label]) => (
+                          <option key={key} value={key}>
+                            {label}
+                          </option>
+                        ))}
                     </select>
                   </label>
                   <button
@@ -1695,11 +1762,15 @@ export default function App() {
                     onChange={(e) => setAction(e.target.value as Action)}
                     disabled={running}
                   >
-                    {Object.entries(actions).map(([key, value]) => (
-                      <option value={key} key={key}>
-                        {value.label}
-                      </option>
-                    ))}
+                    {Object.entries(actions)
+                      .filter(
+                        ([key]) => !sourceOnly || key !== "copy_to_source",
+                      )
+                      .map(([key, value]) => (
+                        <option value={key} key={key}>
+                          {value.label}
+                        </option>
+                      ))}
                   </select>
                 </label>
               )}
@@ -2277,9 +2348,11 @@ export default function App() {
               <section>
                 <h3>Review the differences</h3>
                 <p>
-                  Source-only and destination-only files are missing on the
-                  other side. Identical means the contents were verified.
-                  Different files keep both versions.
+                  Compare checks source files at the same relative paths in the
+                  destination. Extra destination files are hidden by default.
+                  Turn on Compare both ways to include them and recover files to
+                  the source. Identical means verified contents; different files
+                  keep both versions.
                 </p>
               </section>
             </div>

@@ -28,6 +28,7 @@ fn fixture() -> Fixture {
         .scan(ScanOptions {
             source: source.to_string_lossy().into(),
             destination: Some(target.to_string_lossy().into()),
+            compare_both_ways: false,
             verify_contents: true,
             excluded_extensions: vec![],
             collect_owners: false,
@@ -247,6 +248,7 @@ fn held_network_files_are_excluded_from_subsequent_scans() {
         .scan(ScanOptions {
             source: f.source.to_string_lossy().into(),
             destination: Some(f.target.to_string_lossy().into()),
+            compare_both_ways: false,
             verify_contents: true,
             excluded_extensions: vec![],
             collect_owners: false,
@@ -308,6 +310,7 @@ fn alternate_stream_copy_succeeds_but_cleanup_proof_is_ineligible() {
         .scan(ScanOptions {
             source: source.to_string_lossy().into(),
             destination: Some(target.to_string_lossy().into()),
+            compare_both_ways: false,
             verify_contents: true,
             excluded_extensions: vec![],
             collect_owners: false,

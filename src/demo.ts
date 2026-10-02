@@ -33,6 +33,7 @@ let scans: Scan[] = [
     errors: 0,
     options: {
       ...folders,
+      compareBothWays: false,
       verifyContents: true,
       collectOwners: false,
       excludedExtensions: [],
@@ -188,6 +189,10 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 function filtered(filter: EntryFilter) {
   return rowsFor(filter.scanId).filter(
     (e) =>
+      (!filter.sourceOnly ||
+        e.sourceRelative != null ||
+        e.destinationRelative == null ||
+        e.status === "error") &&
       (!filter.status || e.status === filter.status) &&
       (!filter.migrationState || e.migrationState === filter.migrationState) &&
       (!filter.extension || e.extension === filter.extension) &&
@@ -197,12 +202,19 @@ function filtered(filter: EntryFilter) {
 }
 function analysis(scanId: number): Analysis {
   const entries = rowsFor(scanId);
-  const group = (key: (entry: Entry) => string) => {
+  const group = (key: (entry: Entry) => string, sourceOnly = false) => {
     const map = new Map<
       string,
       { label: string; count: number; bytes: number }
     >();
     entries.forEach((e) => {
+      if (
+        sourceOnly &&
+        e.sourceRelative == null &&
+        e.destinationRelative != null &&
+        e.status !== "error"
+      )
+        return;
       const label = key(e);
       const row = map.get(label) || { label, count: 0, bytes: 0 };
       row.count++;
@@ -239,6 +251,7 @@ function analysis(scanId: number): Analysis {
   return {
     sizeStatistics,
     statuses: group((e) => e.status),
+    sourceStatuses: group((e) => e.status, true),
     migrationStates: group((e) => e.migrationState),
     extensions: group((e) => e.extension),
     folders: group((e) => e.relativePath.split("/")[0]),

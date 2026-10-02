@@ -23,6 +23,7 @@ export function withRules(options: ScanOptions): ScanOptions {
   ];
   return {
     ...options,
+    compareBothWays: options.compareBothWays ?? false,
     excludedExtensions: extensions(options.excludedExtensions),
     rules: {
       ...emptyRules,

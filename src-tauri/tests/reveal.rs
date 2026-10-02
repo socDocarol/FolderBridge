@@ -35,6 +35,7 @@ fn reveals_existing_file_and_nearest_missing_parent_from_the_same_scan() {
             source: source.to_string_lossy().into(),
             destination: Some(destination.to_string_lossy().into()),
             verify_contents: false,
+            compare_both_ways: false,
             excluded_extensions: vec![],
             collect_owners: false,
             rules: Default::default(),

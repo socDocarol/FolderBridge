@@ -9,6 +9,7 @@ fn options(source: &std::path::Path, destination: &std::path::Path) -> ScanOptio
     ScanOptions {
         source: source.to_string_lossy().into(),
         destination: Some(destination.to_string_lossy().into()),
+        compare_both_ways: false,
         verify_contents: true,
         excluded_extensions: vec![],
         collect_owners: false,
@@ -304,6 +305,7 @@ fn old_databases_and_saved_pairs_load_without_discarding_history() {
     drop(conn);
     let engine = Engine::open(&db).unwrap();
     assert!(engine.store.scan(1).unwrap().options.is_none());
+    assert!(!engine.store.pairs().unwrap()[0].options.compare_both_ways);
     assert_eq!(
         engine.store.pairs().unwrap()[0].options.excluded_extensions,
         vec![".bak"]
@@ -326,4 +328,85 @@ fn old_databases_and_saved_pairs_load_without_discarding_history() {
     );
     drop(engine);
     Engine::open(&db).unwrap();
+}
+
+#[test]
+fn one_way_scope_matches_counts_selection_and_csv_without_hiding_errors() {
+    let t = tempdir().unwrap();
+    let a = t.path().join("network");
+    let b = t.path().join("centralized");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&b).unwrap();
+    for (name, data) in [
+        ("missing.txt", "original"),
+        ("same.txt", "same"),
+        ("different.txt", "original"),
+        ("source.bak", "backup"),
+    ] {
+        fs::write(a.join(name), data).unwrap();
+    }
+    for (name, data) in [
+        ("same.txt", "same"),
+        ("different.txt", "changed"),
+        ("teams-only.txt", "other team"),
+        ("teams-only.bak", "other backup"),
+        ("issue.txt", "inaccessible"),
+    ] {
+        fs::write(b.join(name), data).unwrap();
+    }
+    let engine = Engine::open(&t.path().join("app.db")).unwrap();
+    let mut o = options(&a, &b);
+    o.excluded_extensions = vec![".bak".into()];
+    let scan = engine.scan(o).unwrap();
+    // A source metadata error can acquire destination metadata during inventory.
+    // Retain such rows even though they have no recorded source-relative path.
+    engine.store.connect().unwrap().execute("UPDATE entries SET status='error',issue='Synthetic metadata error' WHERE scan_id=? AND relative_path='issue.txt'", [scan]).unwrap();
+    let filter = EntryFilter {
+        scan_id: scan,
+        source_only: true,
+        ..Default::default()
+    };
+    let page = engine.store.entries(&filter).unwrap();
+    assert_eq!(page.total, 5);
+    assert!(page
+        .entries
+        .iter()
+        .all(|e| !e.relative_path.starts_with("teams-only")));
+    assert!(page.entries.iter().any(|e| e.relative_path == "source.bak"));
+    assert!(page.entries.iter().any(|e| e.status == "error"));
+    let mut expected: Vec<_> = page.entries.iter().map(|e| e.id).collect();
+    expected.sort();
+    assert_eq!(engine.store.matching_ids(&filter).unwrap(), expected);
+    let limited = engine
+        .store
+        .entries(&EntryFilter {
+            limit: 2,
+            offset: 2,
+            ..filter.clone()
+        })
+        .unwrap();
+    assert_eq!(limited.total, 5);
+    assert_eq!(limited.entries.len(), 2);
+    let stats = engine.store.analysis(scan).unwrap();
+    assert_eq!(
+        stats.source_statuses.iter().map(|s| s.count).sum::<u64>(),
+        5
+    );
+    assert_eq!(stats.statuses.iter().map(|s| s.count).sum::<u64>(), 7);
+    assert_eq!(stats.destination_bytes, 45);
+    let report = t.path().join("source.csv");
+    assert_eq!(engine.export_scan(filter.clone(), &report).unwrap(), 5);
+    assert!(!fs::read_to_string(report).unwrap().contains("teams-only"));
+    let both = EntryFilter {
+        source_only: false,
+        ..filter
+    };
+    assert_eq!(engine.store.entries(&both).unwrap().total, 7);
+    assert_eq!(engine.store.matching_ids(&both).unwrap().len(), 7);
+    assert_eq!(
+        engine
+            .export_scan(both, &t.path().join("both.csv"))
+            .unwrap(),
+        7
+    );
 }

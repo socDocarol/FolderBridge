@@ -22,7 +22,7 @@ pub struct Store {
 }
 
 pub(crate) const COLUMNS: &str = "id,scan_id,relative_path,source_relative,destination_relative,extension,status,source_size,destination_size,source_modified,destination_modified,source_hash,destination_hash,owner,issue,rule_review,rule_reason,migration_state,migration_reason";
-pub(crate) const FILTER: &str = "scan_id=?1 AND (?2='' OR instr(lower(relative_path),lower(?2))>0) AND (?3='' OR status=?3) AND (?4='' OR extension=?4) AND max(coalesce(source_size,0),coalesce(destination_size,0))>=?5 AND (?6='' OR migration_state=?6)";
+pub(crate) const FILTER: &str = "scan_id=?1 AND (?2='' OR instr(lower(relative_path),lower(?2))>0) AND (?3='' OR status=?3) AND (?4='' OR extension=?4) AND max(coalesce(source_size,0),coalesce(destination_size,0))>=?5 AND (?6='' OR migration_state=?6) AND (?7=0 OR source_relative IS NOT NULL OR destination_relative IS NULL OR status='error')";
 
 fn number(row: &Row<'_>, index: usize) -> rusqlite::Result<u64> {
     Ok(row.get::<_, i64>(index)?.max(0) as u64)
@@ -208,12 +208,13 @@ impl Store {
                     filter.status,
                     filter.extension,
                     filter.min_size.min(i64::MAX as u64) as i64,
-                    filter.migration_state
+                    filter.migration_state,
+                    filter.source_only
                 ],
                 |r| number(r, 0),
             )
             .map_err(db_error)?;
-        let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM entries WHERE {conditions} ORDER BY relative_path COLLATE NOCASE LIMIT ?7 OFFSET ?8")).map_err(db_error)?;
+        let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM entries WHERE {conditions} ORDER BY relative_path COLLATE NOCASE LIMIT ?8 OFFSET ?9")).map_err(db_error)?;
         let limit = if filter.limit == 0 {
             100
         } else {
@@ -228,6 +229,7 @@ impl Store {
                     filter.extension,
                     filter.min_size.min(i64::MAX as u64) as i64,
                     filter.migration_state,
+                    filter.source_only,
                     limit as i64,
                     filter.offset.min(i64::MAX as u64) as i64
                 ],
@@ -257,7 +259,8 @@ impl Store {
                     filter.status,
                     filter.extension,
                     filter.min_size.min(i64::MAX as u64) as i64,
-                    filter.migration_state
+                    filter.migration_state,
+                    filter.source_only
                 ],
                 |r| r.get(0),
             )
@@ -273,10 +276,10 @@ impl Store {
 
     pub fn analysis(&self, id: i64) -> Result<Analysis> {
         let conn = self.connect()?;
-        let group = |expression: &str| -> Result<Vec<GroupTotal>> {
-            let mut stmt = conn.prepare(&format!("SELECT {expression} AS label,count(*),sum(coalesce(source_size,destination_size,0)) FROM entries WHERE scan_id=? GROUP BY label ORDER BY 3 DESC")).map_err(db_error)?;
+        let group = |expression: &str, source_only: bool| -> Result<Vec<GroupTotal>> {
+            let mut stmt = conn.prepare(&format!("SELECT {expression} AS label,count(*),sum(coalesce(source_size,destination_size,0)) FROM entries WHERE scan_id=?1 AND (?2=0 OR source_relative IS NOT NULL OR destination_relative IS NULL OR status='error') GROUP BY label ORDER BY 3 DESC")).map_err(db_error)?;
             let rows = stmt
-                .query_map([id], |r| {
+                .query_map(params![id, source_only], |r| {
                     Ok(GroupTotal {
                         label: r.get(0)?,
                         count: number(r, 1)?,
@@ -287,8 +290,8 @@ impl Store {
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)
         };
         let totals = conn.query_row("SELECT coalesce(sum(source_size),0),coalesce(sum(destination_size),0),coalesce(sum(CASE WHEN status='identical' THEN destination_size ELSE 0 END),0) FROM entries WHERE scan_id=?", [id], |r| Ok((number(r,0)?,number(r,1)?,number(r,2)?))).map_err(db_error)?;
-        Ok(Analysis { statuses:group("status")?, migration_states:group("migration_state")?, extensions:group("CASE WHEN extension='' THEN '(no extension)' ELSE extension END")?,
-            folders:group("CASE WHEN instr(relative_path,'/')>0 THEN substr(relative_path,1,instr(relative_path,'/')-1) ELSE '(root)' END")?,
+        Ok(Analysis { statuses:group("status", false)?, source_statuses:group("status", true)?, migration_states:group("migration_state", false)?, extensions:group("CASE WHEN extension='' THEN '(no extension)' ELSE extension END", false)?,
+            folders:group("CASE WHEN instr(relative_path,'/')>0 THEN substr(relative_path,1,instr(relative_path,'/')-1) ELSE '(root)' END", false)?,
             source_bytes:totals.0,destination_bytes:totals.1,duplicate_bytes:totals.2,size_statistics:self.size_statistics(id)? })
     }
 

@@ -351,6 +351,21 @@ select,
 .setup-toolbar {
   justify-content: space-between;
   margin-top: 7px;
+  flex-wrap: wrap;
+}
+.direction-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.direction-toggle input {
+  margin: 0;
+}
+.comparison-summary.one-way-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .comparison-meta {
   font-size: 11px;

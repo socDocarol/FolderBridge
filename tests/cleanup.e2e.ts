@@ -61,6 +61,7 @@ test("SharePoint cleanup requires the sync acknowledgement and fits a small wind
 }) => {
   await page.setViewportSize({ width: 760, height: 560 });
   await page.goto("/");
+  await page.getByLabel("Compare both ways", { exact: true }).check();
   await page
     .getByLabel("Search files", { exact: true })
     .fill("Asset inventory");

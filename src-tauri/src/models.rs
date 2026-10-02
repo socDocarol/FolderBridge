@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct ScanOptions {
     pub source: String,
     pub destination: Option<String>,
+    #[serde(default)]
+    pub compare_both_ways: bool,
     #[serde(default = "yes")]
     pub verify_contents: bool,
     #[serde(default)]
@@ -93,6 +95,8 @@ pub struct Entry {
 pub struct EntryFilter {
     pub scan_id: i64,
     #[serde(default)]
+    pub source_only: bool,
+    #[serde(default)]
     pub search: String,
     #[serde(default)]
     pub status: String,
@@ -127,6 +131,7 @@ pub struct GroupTotal {
 #[serde(rename_all = "camelCase")]
 pub struct Analysis {
     pub statuses: Vec<GroupTotal>,
+    pub source_statuses: Vec<GroupTotal>,
     pub migration_states: Vec<GroupTotal>,
     pub extensions: Vec<GroupTotal>,
     pub folders: Vec<GroupTotal>,

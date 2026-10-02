@@ -38,6 +38,11 @@ try {
     .last()
     .click();
   await expect(page.locator("tbody tr").first()).toBeVisible();
+  await expect(
+    page.getByLabel("Compare both ways", { exact: true }),
+  ).not.toBeChecked();
+  await expect(page.locator(".table-footer")).toContainText("of 3 files");
+  await page.getByLabel("Compare both ways", { exact: true }).check();
   await expect(page.locator(".table-footer")).toContainText("of 4 files");
   const scans = await invoke("list_scans");
   const scanId = scans[0].id;

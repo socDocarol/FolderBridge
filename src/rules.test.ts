@@ -6,6 +6,7 @@ test("legacy saved extensions are normalized so Include can remove an exclusion"
   const options = withRules({
     source: "source",
     destination: "target",
+    compareBothWays: false,
     verifyContents: true,
     collectOwners: false,
     excludedExtensions: ["BAK", " .bak ", "PDF"],
@@ -28,4 +29,5 @@ test("old saved pairs gain empty rules without enabling silent exclusions", () =
   } as unknown as ScanOptions);
   expect(options.rules.reviewAbove).toBeNull();
   expect(options.rules.excludedPaths).toEqual([]);
+  expect(options.compareBothWays).toBe(false);
 });

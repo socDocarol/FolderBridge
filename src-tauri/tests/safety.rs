@@ -10,6 +10,7 @@ fn options(source: &std::path::Path, destination: &std::path::Path) -> ScanOptio
     ScanOptions {
         source: source.to_string_lossy().into(),
         destination: Some(destination.to_string_lossy().into()),
+        compare_both_ways: false,
         verify_contents: true,
         excluded_extensions: vec![],
         collect_owners: false,

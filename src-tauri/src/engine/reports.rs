@@ -44,7 +44,8 @@ impl Engine {
                         filter.status,
                         filter.extension,
                         filter.min_size.min(i64::MAX as u64) as i64,
-                        filter.migration_state
+                        filter.migration_state,
+                        filter.source_only
                     ],
                     read_entry,
                 )

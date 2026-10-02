@@ -40,8 +40,8 @@ Open the [latest release](https://github.com/socDocarol/FolderBridge/releases/la
 
 | File | Use it when |
 | --- | --- |
-| `FolderBridge_0.4.0.exe` | You want to run the app directly without installing FolderBridge. |
-| `FolderBridge_0.4.0_x64-setup.exe` | You want a per-user installation. Setup can download WebView2 if it is missing. |
+| `FolderBridge_0.4.1.exe` | You want to run the app directly without installing FolderBridge. |
+| `FolderBridge_0.4.1_x64-setup.exe` | You want a per-user installation. Setup can download WebView2 if it is missing. |
 | `SHA256SUMS.txt` | You want to check that a download matches the published build. |
 
 **Requirements:** Windows x64, Microsoft Edge WebView2, and permission to read the selected folders. Copying and cleanup also require the relevant write or move permissions. The app uses your Windows access; it does not mount drives or sign in to SharePoint.
@@ -51,7 +51,7 @@ The current build is unsigned, so Windows may show an unknown-publisher warning.
 To check a download in PowerShell:
 
 ```powershell
-Get-FileHash .\FolderBridge_0.4.0.exe -Algorithm SHA256
+Get-FileHash .\FolderBridge_0.4.1.exe -Algorithm SHA256
 ```
 
 Compare the hash with `SHA256SUMS.txt` from the same release. The standalone app still stores its history in your Windows profile; moving the EXE does not move that history.
@@ -76,6 +76,14 @@ SharePoint:  the library's synced folder in File Explorer
 ```
 
 Choose separate roots. One selected folder cannot be inside the other.
+
+### One-way comparison by default
+
+Set the network folder as **Source** and the centralized SharePoint folder as **Destination**. Compare checks source files against the destination. Files found only in SharePoint are hidden, so documents brought in from other Teams channels do not appear as missing network files.
+
+Turn on **Compare both ways** beside the folder controls to include destination-only files and enable recovery to the source. The toggle updates results without rescanning and clears the selection. Counts, bulk selection, and comparison CSV exports follow the chosen direction. **Save pair** retains the setting; older saved pairs default to one-way. Storage still includes both folders, and scan errors remain visible in either view.
+
+Both modes match the **same relative path**. A file moved or renamed elsewhere in SharePoint can still appear missing. Choose corresponding folder roots; this version does not search for matching contents elsewhere in the library.
 
 ### What each result means
 
@@ -312,7 +320,7 @@ npm run test:e2e
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-Version 0.4.0 validation includes **42 Rust tests, 5 frontend unit tests, and 11 browser checks**, plus native Windows scan/copy/cleanup/restore, mixed migrations, rule approval, skipped-file preservation, Explorer navigation, and CSV export. The preceding release also passed a disposable-file Recycle Bin round trip. These checks do not establish live SharePoint or SMB behavior.
+Version 0.4.1 validation includes **43 Rust tests, 5 frontend unit tests, and 13 browser checks**, plus native Windows scan/copy/cleanup/restore, mixed migrations, rule approval, skipped-file preservation, Explorer navigation, and CSV export. Version 0.3.0 also passed a disposable-file Recycle Bin round trip. These checks do not establish live SharePoint or SMB behavior.
 
 For isolated native smoke testing, launch a test build with separate app and WebView2 data directories, then run the included harness:
 
@@ -321,7 +329,7 @@ $testProfile = Join-Path (Get-Location) ('qa\native-' + [guid]::NewGuid().ToStri
 $env:FOLDERBRIDGE_DATA_DIR = $testProfile
 $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $testProfile 'webview'
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9227'
-Start-Process '.\release\public-v0.4.0\FolderBridge_0.4.0.exe' -WindowStyle Hidden
+Start-Process '.\release\public-v0.4.1\FolderBridge_0.4.1.exe' -WindowStyle Hidden
 node tests/native-smoke.mjs
 node tests/native-migrate.mjs
 ```

@@ -9,6 +9,7 @@ export type FileRules = {
 export type ScanOptions = {
   source: string;
   destination: string | null;
+  compareBothWays: boolean;
   verifyContents: boolean;
   excludedExtensions: string[];
   collectOwners: boolean;
@@ -58,6 +59,7 @@ export type Entry = {
 };
 export type EntryFilter = {
   scanId: number;
+  sourceOnly: boolean;
   search: string;
   status: string;
   migrationState: string;
@@ -70,6 +72,7 @@ export type EntryPage = { entries: Entry[]; total: number };
 export type GroupTotal = { label: string; count: number; bytes: number };
 export type Analysis = {
   statuses: GroupTotal[];
+  sourceStatuses: GroupTotal[];
   migrationStates: GroupTotal[];
   extensions: GroupTotal[];
   folders: GroupTotal[];
